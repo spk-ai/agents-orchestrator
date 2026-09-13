@@ -143,7 +143,7 @@ func TestFailedUnremovedWorkloadsRemainTracked(t *testing.T) {
 	if err != nil || len(actual) != 1 || actual[0] != pending {
 		t.Fatalf("unexpected actual workloads: %v, %v", actual, err)
 	}
-	actions, err := ComputeActions([]AgentInstanceTarget{{AgentID: agentID, AgentInstanceID: instanceID}}, actual, nil, time.Hour, now)
+	actions, err := ComputeActions([]AgentInstanceTarget{{AgentID: agentID, AgentInstanceID: instanceID}}, actual, nil, nil, time.Hour, now)
 	if err != nil || len(actions.ToStart) != 0 || len(actions.ToStop) != 1 || actions.ToStop[0] != pending {
 		t.Fatalf("failed workload must stop before replacement: %v, %v", actions, err)
 	}

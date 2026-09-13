@@ -28,6 +28,7 @@ type FakeAgentsClient struct {
 	UpdateSandboxRuntimeStateFunc   func(context.Context, *agentsv1.UpdateSandboxRuntimeStateRequest, ...grpc.CallOption) (*agentsv1.UpdateSandboxRuntimeStateResponse, error)
 	DeleteSandboxFunc               func(context.Context, *agentsv1.DeleteSandboxRequest, ...grpc.CallOption) (*agentsv1.DeleteSandboxResponse, error)
 	ListInstancesFunc               func(context.Context, *agentsv1.ListInstancesRequest, ...grpc.CallOption) (*agentsv1.ListInstancesResponse, error)
+	GetInstanceFunc                 func(context.Context, *agentsv1.GetInstanceRequest, ...grpc.CallOption) (*agentsv1.GetInstanceResponse, error)
 	PauseInstanceFunc               func(context.Context, *agentsv1.PauseInstanceRequest, ...grpc.CallOption) (*agentsv1.PauseInstanceResponse, error)
 }
 
@@ -161,7 +162,10 @@ func (f *FakeAgentsClient) CreateInstance(context.Context, *agentsv1.CreateInsta
 	return nil, ErrNotImplemented
 }
 
-func (f *FakeAgentsClient) GetInstance(context.Context, *agentsv1.GetInstanceRequest, ...grpc.CallOption) (*agentsv1.GetInstanceResponse, error) {
+func (f *FakeAgentsClient) GetInstance(ctx context.Context, req *agentsv1.GetInstanceRequest, opts ...grpc.CallOption) (*agentsv1.GetInstanceResponse, error) {
+	if f.GetInstanceFunc != nil {
+		return f.GetInstanceFunc(ctx, req, opts...)
+	}
 	return nil, ErrNotImplemented
 }
 

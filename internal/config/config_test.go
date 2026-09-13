@@ -9,6 +9,26 @@ import (
 
 const defaultZitiSidecarImage = "openziti/ziti-tunnel:2.0.0-pre10"
 
+func TestStopInactiveInstancesIsExplicit(t *testing.T) {
+	for _, value := range []string{"", "false", "true", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			setBaseEnv(t)
+			t.Setenv("ZITI_ENABLED", "false")
+			t.Setenv("STOP_INACTIVE_INSTANCES", value)
+			cfg, err := FromEnv()
+			if value == "invalid" {
+				if err == nil || !strings.Contains(err.Error(), "STOP_INACTIVE_INSTANCES") {
+					t.Fatalf("expected invalid policy error: %v", err)
+				}
+				return
+			}
+			if err != nil || cfg.StopInactiveInstances != (value == "true") {
+				t.Fatalf("unexpected policy %t: %v", cfg.StopInactiveInstances, err)
+			}
+		})
+	}
+}
+
 // The identity this process acts as is not something to guess at, so it has no
 // default and an installation that omits it does not start.
 func TestFromEnvRequiresPlatformIdentity(t *testing.T) {

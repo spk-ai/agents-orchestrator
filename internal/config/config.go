@@ -57,6 +57,7 @@ type Config struct {
 	WorkloadReconcileInterval time.Duration
 	IdleTimeout               time.Duration
 	StopTimeoutSec            uint32
+	StopInactiveInstances     bool
 	LeaseName                 string
 	LeaseNamespace            string
 	EgressCANamespace         string
@@ -318,6 +319,13 @@ func FromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("parse STOP_TIMEOUT_SEC: %w", err)
 		}
 		cfg.StopTimeoutSec = uint32(parsed)
+	}
+	if raw := os.Getenv("STOP_INACTIVE_INSTANCES"); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse STOP_INACTIVE_INSTANCES: %w", err)
+		}
+		cfg.StopInactiveInstances = parsed
 	}
 
 	cfg.LeaseName = os.Getenv("LEASE_NAME")
