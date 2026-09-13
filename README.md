@@ -19,8 +19,9 @@ Failures retain an unset `removed_at` until confirmed absent; these records rema
 in reconciliation and prevent replacements. A lost start reply is inspected and
 stopped using the ID persisted before the request. Existing failure reasons and
 retry backoff survive cleanup. Sandbox workspace deletion likewise waits for the
-workload stop to be confirmed. Persistent agent volumes are not deleted by this
-change.
+workload stop to be confirmed. Persistent-volume TTL starts from confirmed
+removal, never a failure's update timestamp; any unremoved workload holds its
+instance's volume even when older removed workloads have expired retention.
 
 This trusts the runner's inspection contract. It is not fencing against a
 partitioned Kubernetes node, force-deleted pods, reused workload IDs or a delayed
