@@ -14,7 +14,7 @@ type resourceTotals struct {
 	ramBytes      int64
 }
 
-func sumAllocatedResources(agent *agentsv1.Agent, mcps []mcpAssignment) (int32, int64, error) {
+func sumAllocatedResources(agent *agentsv1.Agent, mcps []mcpAssignment, mainResources *agentsv1.ComputeResources) (int32, int64, error) {
 	if agent == nil {
 		return 0, 0, fmt.Errorf("agent missing")
 	}
@@ -24,7 +24,7 @@ func sumAllocatedResources(agent *agentsv1.Agent, mcps []mcpAssignment) (int32, 
 	}
 	label := fmt.Sprintf("agent %s", meta.GetId())
 	totals := resourceTotals{}
-	if err := totals.add(agent.GetResources(), label); err != nil {
+	if err := totals.add(mainResources, label); err != nil {
 		return 0, 0, err
 	}
 	for _, mcp := range mcps {
