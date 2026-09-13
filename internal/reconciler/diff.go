@@ -54,11 +54,11 @@ func ComputeActions(desired []AgentInstanceTarget, actual []*runnersv1.Workload,
 		}
 	}
 	for agentInstanceID, entry := range actualSet {
-		if _, ok := desiredSet[agentInstanceID]; ok {
+		if entry.workload.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING || entry.workload.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED {
+			result.ToStop = append(result.ToStop, entry.workload)
 			continue
 		}
-		if entry.workload.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING {
-			result.ToStop = append(result.ToStop, entry.workload)
+		if _, ok := desiredSet[agentInstanceID]; ok {
 			continue
 		}
 		agentID, err := uuidutil.ParseUUID(workloadAgentClassID(entry.workload), "workload.agent_class_id")

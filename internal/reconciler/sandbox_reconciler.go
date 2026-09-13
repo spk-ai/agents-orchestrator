@@ -166,7 +166,7 @@ func (r *Reconciler) loadSandboxWorkloadPlan(ctx context.Context, sandbox *agent
 	}
 	plan := &sandboxWorkloadPlan{sandbox: sandbox, sandboxID: sandboxID}
 	for _, workload := range workloads {
-		if isActiveWorkloadStatus(workload.GetStatus()) {
+		if workload.GetRemovedAt() == nil && (isActiveWorkloadStatus(workload.GetStatus()) || workload.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED) {
 			if plan.activeWorkload != nil {
 				if err := r.stopSandboxWorkload(ctx, workload); err != nil {
 					return nil, err

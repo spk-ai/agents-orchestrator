@@ -26,12 +26,15 @@ func (r *Reconciler) shouldStartWorkload(ctx context.Context, target AgentInstan
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_STARTING,
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING,
-	}, 1)
+		runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED,
+	}, 0)
 	if err != nil {
 		return false, err
 	}
-	if len(active) > 0 {
-		return false, nil
+	for _, workload := range active {
+		if workload.GetRemovedAt() == nil {
+			return false, nil
+		}
 	}
 	latest, err := r.latestWorkloadByAgentInstance(ctx, target.AgentInstanceID.String(), []runnersv1.WorkloadStatus{
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED,

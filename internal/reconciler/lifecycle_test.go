@@ -729,8 +729,8 @@ func TestStartWorkloadDeletesIdentityOnRunnerError(t *testing.T) {
 			if req.GetFailureMessage() != "runner error" {
 				return nil, errors.New("unexpected failure message")
 			}
-			if req.GetRemovedAt() == nil {
-				return nil, errors.New("missing removed_at")
+			if req.GetRemovedAt() != nil {
+				t.Fatal("lost start reply must not claim removal")
 			}
 			return &runnersv1.UpdateWorkloadResponse{}, nil
 		},
@@ -848,8 +848,8 @@ func TestStartWorkloadRollsBackOnWorkloadIDMismatch(t *testing.T) {
 			if req.GetInstanceId() != instanceID {
 				return nil, errors.New("unexpected instance id")
 			}
-			if req.GetRemovedAt() == nil {
-				return nil, errors.New("missing removed_at")
+			if req.GetRemovedAt() != nil {
+				t.Fatal("stop acknowledgement must not claim removal")
 			}
 			return &runnersv1.UpdateWorkloadResponse{}, nil
 		},
@@ -955,6 +955,7 @@ func TestStopWorkloadDeletesIdentityAfterStop(t *testing.T) {
 	var calls []string
 	var updateStatuses []runnersv1.WorkloadStatus
 	runner := &fakeRunnerClient{
+		inspectWorkload: absentRunnerWorkload,
 		stopWorkload: func(_ context.Context, req *runnerv1.StopWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error) {
 			calls = append(calls, "stop")
 			if req.GetWorkloadId() != rawInstanceID {
@@ -1007,7 +1008,7 @@ func TestStopWorkloadDeletesIdentityAfterStop(t *testing.T) {
 	}
 }
 
-func TestStopWorkloadMarksMissingRunnerOnNoTerminators(t *testing.T) {
+func TestStopWorkloadRetainsWorkloadOnNoTerminators(t *testing.T) {
 	ctx := context.Background()
 	agentID := uuid.New()
 	testAssembler := newTestAssembler(agentID, true)
@@ -1045,27 +1046,12 @@ func TestStopWorkloadMarksMissingRunnerOnNoTerminators(t *testing.T) {
 		Status:          runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
 	})
 
-	if updateReq == nil {
-		t.Fatal("expected update workload")
-	}
-	if updateReq.GetId() != "workload-1" {
-		t.Fatalf("unexpected workload id: %s", updateReq.GetId())
-	}
-	if updateReq.GetStatus() != runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED {
-		t.Fatalf("unexpected workload status: %v", updateReq.GetStatus())
-	}
-	if updateReq.GetFailureReason() != runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_RUNTIME_LOST {
-		t.Fatalf("unexpected failure reason: %v", updateReq.GetFailureReason())
-	}
-	if updateReq.GetFailureMessage() != "workload missing on runner" {
-		t.Fatalf("unexpected failure message: %v", updateReq.GetFailureMessage())
-	}
-	if updateReq.GetRemovedAt() == nil {
-		t.Fatal("expected removed_at")
+	if updateReq != nil {
+		t.Fatal("an unreachable runner is not a missing workload")
 	}
 }
 
-func TestStopWorkloadMarksMissingRunnerOnNoTerminatorsStopError(t *testing.T) {
+func TestStopWorkloadRetainsStoppingOnNoTerminatorsStopError(t *testing.T) {
 	ctx := context.Background()
 	agentID := uuid.New()
 	testAssembler := newTestAssembler(agentID, true)
@@ -1121,23 +1107,21 @@ func TestStopWorkloadMarksMissingRunnerOnNoTerminatorsStopError(t *testing.T) {
 	if !stopCalled {
 		t.Fatal("expected stop workload")
 	}
-	if !reflect.DeepEqual(updateStatuses, []runnersv1.WorkloadStatus{runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING, runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED}) {
+	if !reflect.DeepEqual(updateStatuses, []runnersv1.WorkloadStatus{runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING}) {
 		t.Fatalf("unexpected update statuses: %v", updateStatuses)
 	}
 }
 
-func TestStopWorkloadMarksFailedWhenInstanceMissing(t *testing.T) {
+func TestStopWorkloadRequestsRunnerWhenStartAcknowledgementMissing(t *testing.T) {
 	ctx := context.Background()
 	agentID := uuid.New()
 	testAssembler := newTestAssembler(agentID, true)
 	runnerID := "runner-1"
 
 	updateCalled := false
-	var updateRequest *runnersv1.UpdateWorkloadRequest
 	runners := &fakeRunnersClient{
 		updateWorkload: func(_ context.Context, req *runnersv1.UpdateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
 			updateCalled = true
-			updateRequest = req
 			return &runnersv1.UpdateWorkloadResponse{}, nil
 		},
 	}
@@ -1157,29 +1141,8 @@ func TestStopWorkloadMarksFailedWhenInstanceMissing(t *testing.T) {
 	})
 	reconciler.stopWorkload(ctx, &runnersv1.Workload{Meta: &runnersv1.EntityMeta{Id: "workload-1"}, RunnerId: runnerID, AgentId: agentID.String(), AgentInstanceId: stringPtr(agentID.String())})
 
-	if dialCalled {
-		t.Fatal("expected no dial call")
-	}
-	if !updateCalled {
-		t.Fatal("expected update workload call")
-	}
-	if updateRequest.GetId() != "workload-1" {
-		t.Fatalf("unexpected workload id: %s", updateRequest.GetId())
-	}
-	if updateRequest.GetStatus() != runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED {
-		t.Fatalf("unexpected workload status: %v", updateRequest.GetStatus())
-	}
-	if updateRequest.GetFailureReason() != runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_RUNTIME_LOST {
-		t.Fatalf("unexpected failure reason: %v", updateRequest.GetFailureReason())
-	}
-	if updateRequest.GetFailureMessage() != "missing instance id" {
-		t.Fatalf("unexpected failure message: %v", updateRequest.GetFailureMessage())
-	}
-	if updateRequest.GetRemovedAt() == nil {
-		t.Fatal("expected removed_at")
-	}
-	if updateRequest.GetInstanceId() != "" {
-		t.Fatalf("expected empty instance id, got %q", updateRequest.GetInstanceId())
+	if !dialCalled || updateCalled {
+		t.Fatal("must contact the runner, not assume an unacknowledged start never happened")
 	}
 }
 
@@ -1192,6 +1155,7 @@ func TestStopWorkloadSkipsIdentityWhenNil(t *testing.T) {
 
 	deleteCalled := false
 	runner := &fakeRunnerClient{
+		inspectWorkload: absentRunnerWorkload,
 		stopWorkload: func(_ context.Context, req *runnerv1.StopWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error) {
 			if req.GetWorkloadId() != instanceID {
 				return nil, errors.New("unexpected workload id")
@@ -1244,6 +1208,7 @@ func TestStopWorkloadSkipsIdentityWhenZitiMgmtNil(t *testing.T) {
 
 	var calls []string
 	runner := &fakeRunnerClient{
+		inspectWorkload: absentRunnerWorkload,
 		stopWorkload: func(_ context.Context, req *runnerv1.StopWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error) {
 			calls = append(calls, "stop")
 			if req.GetWorkloadId() != instanceID {
@@ -1708,6 +1673,7 @@ func TestGroupMembershipConsumerLoopRetriesWithoutBlocking(t *testing.T) {
 		}
 	}
 }
+
 // testPlatformIdentityID stands for the identity this process runs as. Set on
 // every test reconciler because the calls that name a caller name this one.
 var testPlatformIdentityID = uuid.MustParse("a3c1e9d2-7f4b-5e1a-9c3d-2b8f6a4e7d10")

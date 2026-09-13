@@ -37,7 +37,6 @@ func (r *Reconciler) markWorkloadFailed(ctx context.Context, workloadID string, 
 	req := &runnersv1.UpdateWorkloadRequest{
 		Id:            workloadID,
 		Status:        &status,
-		RemovedAt:     timestamppb.New(time.Now().UTC()),
 		FailureReason: &reasonValue,
 	}
 	if instanceID != nil && *instanceID != "" {

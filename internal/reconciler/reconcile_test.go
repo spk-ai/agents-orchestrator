@@ -56,6 +56,7 @@ func TestReconcileWorkloadsFailsMissingSandbox(t *testing.T) {
 
 	// The runner no longer reports it.
 	runner := &fakeRunnerClient{
+		inspectWorkload: absentRunnerWorkload,
 		listWorkloads: func(_ context.Context, _ *runnerv1.ListWorkloadsRequest, _ ...grpc.CallOption) (*runnerv1.ListWorkloadsResponse, error) {
 			return &runnerv1.ListWorkloadsResponse{}, nil
 		},
@@ -569,8 +570,8 @@ func TestReconcileWorkloadsFailsCrashloop(t *testing.T) {
 	if !stopCalled {
 		t.Fatal("expected stop workload")
 	}
-	if !deleteCalled {
-		t.Fatal("expected delete identity")
+	if deleteCalled {
+		t.Fatal("must not delete identity while inspect still reports the workload")
 	}
 }
 
@@ -785,7 +786,7 @@ func TestReconcileWorkloadsStopsOrphan(t *testing.T) {
 	}
 }
 
-func TestReconcileWorkloadsMarksMissingRunnerOnNoTerminators(t *testing.T) {
+func TestReconcileWorkloadsRetainsWorkloadOnNoTerminators(t *testing.T) {
 	ctx := context.Background()
 	runnerID := "runner-1"
 	workloadID := "workload-1"
@@ -825,21 +826,12 @@ func TestReconcileWorkloadsMarksMissingRunnerOnNoTerminators(t *testing.T) {
 	if err := reconciler.reconcileWorkloads(ctx); err != nil {
 		t.Fatalf("reconcile workloads: %v", err)
 	}
-	if updateReq == nil {
-		t.Fatal("expected update workload")
-	}
-	if updateReq.GetId() != workloadID {
-		t.Fatalf("unexpected workload id: %v", updateReq.GetId())
-	}
-	if updateReq.GetStatus() != runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED {
-		t.Fatalf("unexpected status: %v", updateReq.GetStatus())
-	}
-	if updateReq.GetRemovedAt() == nil {
-		t.Fatal("expected removed_at")
+	if updateReq != nil {
+		t.Fatal("runner dial failure does not confirm removal")
 	}
 }
 
-func TestReconcileWorkloadsMarksMissingRunnerOnNoTerminatorsListError(t *testing.T) {
+func TestReconcileWorkloadsRetainsWorkloadOnNoTerminatorsListError(t *testing.T) {
 	ctx := context.Background()
 	runnerID := "runner-1"
 	workloadID := "workload-1"
@@ -884,17 +876,8 @@ func TestReconcileWorkloadsMarksMissingRunnerOnNoTerminatorsListError(t *testing
 	if err := reconciler.reconcileWorkloads(ctx); err != nil {
 		t.Fatalf("reconcile workloads: %v", err)
 	}
-	if updateReq == nil {
-		t.Fatal("expected update workload")
-	}
-	if updateReq.GetId() != workloadID {
-		t.Fatalf("unexpected workload id: %v", updateReq.GetId())
-	}
-	if updateReq.GetStatus() != runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED {
-		t.Fatalf("unexpected status: %v", updateReq.GetStatus())
-	}
-	if updateReq.GetRemovedAt() == nil {
-		t.Fatal("expected removed_at")
+	if updateReq != nil {
+		t.Fatal("runner list failure does not confirm removal")
 	}
 }
 
@@ -921,6 +904,7 @@ func TestReconcileWorkloadsMarksMissingRunnerOnMissingWorkload(t *testing.T) {
 	}
 
 	runner := &fakeRunnerClient{
+		inspectWorkload: absentRunnerWorkload,
 		listWorkloads: func(_ context.Context, _ *runnerv1.ListWorkloadsRequest, _ ...grpc.CallOption) (*runnerv1.ListWorkloadsResponse, error) {
 			return &runnerv1.ListWorkloadsResponse{}, nil
 		},
@@ -1019,8 +1003,8 @@ func TestReconcileWorkloadsDegradesUnenrolledRunner(t *testing.T) {
 	if err := reconciler.reconcileWorkloads(ctx); err != nil {
 		t.Fatalf("reconcile workloads: %v", err)
 	}
-	if updateCount != 2 {
-		t.Fatalf("expected 2 workload updates, got %d", updateCount)
+	if updateCount != 0 {
+		t.Fatalf("unenrollment is not removal evidence; got %d workload updates", updateCount)
 	}
 	if degradeCalls != 0 {
 		t.Fatalf("expected 0 degrade calls, got %d", degradeCalls)
@@ -2058,7 +2042,7 @@ func TestReconcileSandboxIdleStopClearsRuntimeWorkload(t *testing.T) {
 			return &runnersv1.UpdateWorkloadResponse{}, nil
 		},
 	}
-	runner := &fakeRunnerClient{stopWorkload: func(context.Context, *runnerv1.StopWorkloadRequest, ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error) {
+	runner := &fakeRunnerClient{inspectWorkload: absentRunnerWorkload, stopWorkload: func(context.Context, *runnerv1.StopWorkloadRequest, ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error) {
 		return &runnerv1.StopWorkloadResponse{}, nil
 	}}
 	reconciler := newTestReconciler(Config{
@@ -2396,7 +2380,7 @@ func TestReconcileSandboxStoppedStopsActiveWorkloadWhenNotIdle(t *testing.T) {
 			return &runnersv1.UpdateWorkloadResponse{}, nil
 		},
 	}
-	runner := &fakeRunnerClient{stopWorkload: func(_ context.Context, req *runnerv1.StopWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error) {
+	runner := &fakeRunnerClient{inspectWorkload: absentRunnerWorkload, stopWorkload: func(_ context.Context, req *runnerv1.StopWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error) {
 		stoppedInstanceID = req.GetWorkloadId()
 		return &runnerv1.StopWorkloadResponse{}, nil
 	}}
