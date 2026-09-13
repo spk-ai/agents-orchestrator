@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -419,59 +418,36 @@ func (r *Reconciler) stopWorkloadWithContext(ctx context.Context, workload *runn
 	if workloadID == "" {
 		return fmt.Errorf("workload missing id")
 	}
-	instanceID := normalizeRunnerWorkloadID(workload.GetInstanceId())
-	if instanceID == "" {
-		r.markWorkloadFailed(ctx, workloadID, nil, runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_RUNTIME_LOST, "missing instance id", nil)
-		return nil
-	}
 	runnerID := workload.GetRunnerId()
 	if runnerID == "" {
 		return fmt.Errorf("workload %s missing runner id", workloadID)
 	}
 	runnerClient, err := r.runnerDialer.Dial(ctx, runnerID)
 	if err != nil {
-		if runnerdial.IsNoTerminators(err) {
-			if err := r.handleMissingRunnerWorkload(ctx, workload); err != nil {
-				return fmt.Errorf("handle missing workload %s after runner dial failure: %w", workloadID, err)
-			}
-			return nil
-		}
 		return fmt.Errorf("dial runner %s for workload %s: %w", runnerID, workloadID, err)
 	}
-	stoppingStatus := runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING
-	if _, err := r.runners.UpdateWorkload(ctx, &runnersv1.UpdateWorkloadRequest{
-		Id:     workloadID,
-		Status: &stoppingStatus,
-	}); err != nil {
-		return fmt.Errorf("update workload %s to stopping: %w", workloadID, err)
-	}
-	workload.Status = stoppingStatus
-	if err := r.stopRunnerWorkload(ctx, runnerClient, instanceID); err != nil {
-		if runnerdial.IsNoTerminators(err) {
-			if err := r.handleMissingRunnerWorkload(ctx, workload); err != nil {
-				return fmt.Errorf("handle missing workload %s after runner stop failure: %w", workloadID, err)
-			}
-			return nil
+	return r.stopWorkloadOnRunner(ctx, runnerClient, workload)
+}
+
+func (r *Reconciler) stopWorkloadOnRunner(ctx context.Context, runnerClient runnerv1.RunnerServiceClient, workload *runnersv1.Workload) error {
+	workloadID := workload.GetMeta().GetId()
+	if workload.GetStatus() != runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED && workload.GetStatus() != runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING {
+		stopping := runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING
+		if _, err := r.runners.UpdateWorkload(ctx, &runnersv1.UpdateWorkloadRequest{Id: workloadID, Status: &stopping}); err != nil {
+			return fmt.Errorf("update workload %s to stopping: %w", workloadID, err)
 		}
+		workload.Status = stopping
+	}
+	instanceID := normalizeRunnerWorkloadID(workload.GetInstanceId())
+	if instanceID == "" {
+		// The requested ID is persisted before StartWorkload. Its reply can be
+		// lost even though the runner created the workload.
+		instanceID = workloadID
+	}
+	if err := r.stopRunnerWorkload(ctx, runnerClient, instanceID); err != nil {
 		return fmt.Errorf("stop workload %s: %w", workloadID, err)
 	}
-	stoppedStatus := runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED
-	if _, err := r.runners.UpdateWorkload(ctx, &runnersv1.UpdateWorkloadRequest{
-		Id:        workloadID,
-		Status:    &stoppedStatus,
-		RemovedAt: timestamppb.New(time.Now().UTC()),
-	}); err != nil {
-		return fmt.Errorf("update workload %s to stopped: %w", workloadID, err)
-	}
-	// Revoked alongside the OpenZiti identity: both are per-workload grants
-	// that outlive nothing.
-	r.revokePullCredential(ctx, workloadID)
-	if r.zitiMgmt != nil && workload.GetZitiIdentityId() != "" {
-		if err := r.deleteIdentity(ctx, workload.GetZitiIdentityId()); err != nil {
-			return fmt.Errorf("delete ziti identity %s after stopping workload %s: %w", workload.GetZitiIdentityId(), workloadID, err)
-		}
-	}
-	return nil
+	return r.handleMissingRunnerWorkload(ctx, runnerClient, workload)
 }
 
 func (r *Reconciler) stopRunnerWorkload(ctx context.Context, runnerClient runnerv1.RunnerServiceClient, instanceID string) error {

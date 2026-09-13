@@ -174,7 +174,7 @@ func TestShouldStartWorkloadBackoffSchedule(t *testing.T) {
 
 // A runner-reported failure carries no removed_at; the row's updated_at
 // stands in, so the instance backs off instead of erroring every cycle.
-func TestShouldStartWorkloadBacksOffOnReportedFailure(t *testing.T) {
+func TestShouldStartWorkloadWaitsForReportedFailureRemoval(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2024, 10, 10, 9, 0, 0, 0, time.UTC)
 	agentID := uuid.New()
@@ -188,6 +188,7 @@ func TestShouldStartWorkloadBacksOffOnReportedFailure(t *testing.T) {
 		agentInstanceID: agentInstanceID,
 		latest:          []*runnersv1.Workload{reported},
 		failed:          []*runnersv1.Workload{reported},
+		active:          []*runnersv1.Workload{reported},
 	}
 	runners := &fakeRunnersClient{listWorkloadsByAgentInstance: fixture.list}
 	reconciler := newTestReconciler(Config{Runners: runners})
@@ -205,8 +206,8 @@ func TestShouldStartWorkloadBacksOffOnReportedFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("should start workload: %v", err)
 	}
-	if !shouldStart {
-		t.Fatal("expected start after the backoff window")
+	if shouldStart {
+		t.Fatal("elapsed backoff is not evidence of removal")
 	}
 }
 
@@ -319,6 +320,7 @@ func (f startDecisionFixture) list(_ context.Context, req *runnersv1.ListWorkloa
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_STARTING,
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING,
+		runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED,
 	}):
 		return &runnersv1.ListWorkloadsByAgentInstanceResponse{Workloads: f.active}, nil
 	case matchStatuses(statuses, []runnersv1.WorkloadStatus{

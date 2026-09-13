@@ -61,6 +61,7 @@ func (r *Reconciler) listActiveSandboxWorkloads(ctx context.Context) ([]*runners
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_STARTING,
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING,
+		runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED,
 	}
 	pageToken := ""
 	var workloads []*runnersv1.Workload
@@ -79,6 +80,9 @@ func (r *Reconciler) listActiveSandboxWorkloads(ctx context.Context) ([]*runners
 		for _, workload := range resp.GetWorkloads() {
 			if workload == nil {
 				return nil, fmt.Errorf("workload is nil")
+			}
+			if workload.GetRemovedAt() != nil {
+				continue
 			}
 			workloads = append(workloads, workload)
 		}
