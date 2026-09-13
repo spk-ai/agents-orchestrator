@@ -148,3 +148,33 @@ func TestFailedUnremovedWorkloadsRemainTracked(t *testing.T) {
 		t.Fatalf("failed workload must stop before replacement: %v, %v", actions, err)
 	}
 }
+
+func TestVolumeTTLWaitsForEveryWorkloadRemoval(t *testing.T) {
+	for _, state := range []runnersv1.WorkloadStatus{runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED, runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING, runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED} {
+		t.Run(state.String(), func(t *testing.T) {
+			instanceID := uuid.NewString()
+			old := timestamppb.New(time.Now().Add(-2 * time.Hour))
+			pending := &runnersv1.Workload{Meta: &runnersv1.EntityMeta{Id: "pending", UpdatedAt: old}, Status: state}
+			r := newTestReconciler(Config{Runners: &fakeRunnersClient{listWorkloadsByAgentInstance: func(context.Context, *runnersv1.ListWorkloadsByAgentInstanceRequest, ...grpc.CallOption) (*runnersv1.ListWorkloadsByAgentInstanceResponse, error) {
+				return &runnersv1.ListWorkloadsByAgentInstanceResponse{Workloads: []*runnersv1.Workload{
+					{Meta: &runnersv1.EntityMeta{Id: "old"}, Status: runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED, RemovedAt: old}, pending,
+				}}, nil
+			}}})
+			ttl := time.Hour
+			volume := &runnersv1.Volume{VolumeId: "definition", AgentInstanceId: &instanceID}
+			info := map[string]volumeTTLInfo{"definition": {persistent: true, ttl: &ttl}}
+			for _, stage := range []string{"unconfirmed", "just removed", "retention elapsed"} {
+				if stage == "just removed" {
+					pending.Status = runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED
+					pending.RemovedAt = timestamppb.Now()
+				} else if stage == "retention elapsed" {
+					pending.RemovedAt = old
+				}
+				expired, err := r.volumeTTLExpired(context.Background(), volume, info, map[string]instanceActivity{})
+				if err != nil || expired != (stage == "retention elapsed") {
+					t.Fatalf("%s: expired=%t err=%v", stage, expired, err)
+				}
+			}
+		})
+	}
+}
