@@ -729,7 +729,7 @@ func TestStartWorkloadDeletesIdentityOnRunnerError(t *testing.T) {
 			if req.GetFailureMessage() != "runner error" {
 				return nil, errors.New("unexpected failure message")
 			}
-			if req.GetRemovedAt() != nil {
+			if req.GetRemovalConfirmedAt() != nil {
 				t.Fatal("lost start reply must not claim removal")
 			}
 			return &runnersv1.UpdateWorkloadResponse{}, nil
@@ -848,7 +848,7 @@ func TestStartWorkloadRollsBackOnWorkloadIDMismatch(t *testing.T) {
 			if req.GetInstanceId() != instanceID {
 				return nil, errors.New("unexpected instance id")
 			}
-			if req.GetRemovedAt() != nil {
+			if req.GetRemovalConfirmedAt() != nil {
 				t.Fatal("stop acknowledgement must not claim removal")
 			}
 			return &runnersv1.UpdateWorkloadResponse{}, nil
@@ -985,10 +985,10 @@ func TestStopWorkloadDeletesIdentityAfterStop(t *testing.T) {
 		updateWorkload: func(_ context.Context, req *runnersv1.UpdateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
 			calls = append(calls, "update-workload")
 			updateStatuses = append(updateStatuses, req.GetStatus())
-			if req.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED && req.GetRemovedAt() == nil {
-				return nil, errors.New("missing removed_at")
+			if req.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED && req.GetRemovalConfirmedAt() == nil {
+				return nil, errors.New("missing removal_confirmed_at")
 			}
-			return &runnersv1.UpdateWorkloadResponse{}, nil
+			return acknowledgedWorkloadUpdate(req), nil
 		},
 	}
 
@@ -1063,8 +1063,8 @@ func TestStopWorkloadRetainsStoppingOnNoTerminatorsStopError(t *testing.T) {
 	runners := &fakeRunnersClient{
 		updateWorkload: func(_ context.Context, req *runnersv1.UpdateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
 			updateStatuses = append(updateStatuses, req.GetStatus())
-			if req.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED && req.GetRemovedAt() == nil {
-				return nil, errors.New("missing removed_at")
+			if req.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED && req.GetRemovalConfirmedAt() == nil {
+				return nil, errors.New("missing removal_confirmed_at")
 			}
 			return &runnersv1.UpdateWorkloadResponse{}, nil
 		},

@@ -463,9 +463,9 @@ func (r *Reconciler) agentInstanceActivity(ctx context.Context, agentInstanceID 
 	}
 	activity := instanceActivity{}
 	for _, workload := range workloads {
-		// Failure can precede physical removal. Do not start volume retention
-		// from updated_at or let an older removed workload expire a live disk.
-		if workload.GetRemovedAt() == nil {
+		// Billing can end before physical removal. Neither removed_at nor an
+		// older confirmed workload may expire a disk still held by another.
+		if workload.GetRemovalConfirmedAt() == nil {
 			activity.hasActive = true
 			continue
 		}
@@ -481,7 +481,7 @@ func (r *Reconciler) agentInstanceActivity(ctx context.Context, agentInstanceID 
 		default:
 			continue
 		}
-		removedTime := workload.GetRemovedAt().AsTime().UTC()
+		removedTime := workload.GetRemovalConfirmedAt().AsTime().UTC()
 		if activity.latestRemovedAt == nil || removedTime.After(*activity.latestRemovedAt) {
 			copy := removedTime
 			activity.latestRemovedAt = &copy
