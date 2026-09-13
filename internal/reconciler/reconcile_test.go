@@ -1414,9 +1414,7 @@ func TestReconcileVolumesTTLExpires(t *testing.T) {
 	}
 }
 
-// A runner-reported failure has no removed_at; its updated_at counts as the
-// removal, so volume TTLs still run down for the instance.
-func TestAgentInstanceActivityFallsBackToUpdatedAt(t *testing.T) {
+func TestAgentInstanceActivityDoesNotTreatFailureTimeAsRemoval(t *testing.T) {
 	ctx := context.Background()
 	instanceID := uuid.New().String()
 	endedAt := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
@@ -1433,11 +1431,11 @@ func TestAgentInstanceActivityFallsBackToUpdatedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent instance activity: %v", err)
 	}
-	if activity.hasActive {
-		t.Fatal("expected no active workloads")
+	if !activity.hasActive {
+		t.Fatal("unconfirmed workload removal must retain its volume")
 	}
-	if activity.latestRemovedAt == nil || !activity.latestRemovedAt.Equal(endedAt) {
-		t.Fatalf("expected latest removal %v, got %v", endedAt, activity.latestRemovedAt)
+	if activity.latestRemovedAt != nil {
+		t.Fatal("updated_at is not physical removal evidence")
 	}
 }
 
