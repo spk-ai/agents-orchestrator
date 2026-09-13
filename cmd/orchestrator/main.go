@@ -224,6 +224,7 @@ func run() error {
 		WorkloadReconcileInterval: cfg.WorkloadReconcileInterval,
 		Idle:                      cfg.IdleTimeout,
 		StopSec:                   cfg.StopTimeoutSec,
+		StopInactiveInstances:     cfg.StopInactiveInstances,
 		MeteringSampleInterval:    cfg.MeteringSampleInterval,
 		PlatformIdentityID:        cfg.PlatformIdentityID,
 	})

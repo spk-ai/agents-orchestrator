@@ -132,7 +132,7 @@ func TestComputeActions(t *testing.T) {
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			result, err := ComputeActions(testCase.desired, testCase.actual, idleTimeouts, idleFallback, now)
+			result, err := ComputeActions(testCase.desired, testCase.actual, nil, idleTimeouts, idleFallback, now)
 			if err != nil {
 				t.Fatalf("compute actions: %v", err)
 			}

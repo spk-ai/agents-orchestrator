@@ -19,17 +19,21 @@ type workloadEntry struct {
 	activityAt time.Time
 }
 
-func ComputeActions(desired []AgentInstanceTarget, actual []*runnersv1.Workload, idleTimeouts map[uuid.UUID]time.Duration, fallbackIdleTimeout time.Duration, now time.Time) (Actions, error) {
+func ComputeActions(desired []AgentInstanceTarget, actual []*runnersv1.Workload, stopRequests map[uuid.UUID]struct{}, idleTimeouts map[uuid.UUID]time.Duration, fallbackIdleTimeout time.Duration, now time.Time) (Actions, error) {
 	desiredSet := make(map[uuid.UUID]AgentInstanceTarget, len(desired))
 	for _, item := range desired {
 		desiredSet[item.AgentInstanceID] = item
 	}
 	actualSet := make(map[uuid.UUID]workloadEntry, len(actual))
-	var duplicates []*runnersv1.Workload
+	var immediateStops []*runnersv1.Workload
 	for _, workload := range actual {
 		agentInstanceID, err := uuidutil.ParseUUID(workloadAgentInstanceID(workload), "workload.agent_instance_id")
 		if err != nil {
 			return Actions{}, err
+		}
+		if _, requested := stopRequests[agentInstanceID]; requested {
+			immediateStops = append(immediateStops, workload)
+			continue
 		}
 		activityAt, err := workloadActivityAt(workload)
 		if err != nil {
@@ -38,17 +42,20 @@ func ComputeActions(desired []AgentInstanceTarget, actual []*runnersv1.Workload,
 		entry := workloadEntry{workload: workload, activityAt: activityAt}
 		if existing, ok := actualSet[agentInstanceID]; ok {
 			if entry.activityAt.Before(existing.activityAt) {
-				duplicates = append(duplicates, existing.workload)
+				immediateStops = append(immediateStops, existing.workload)
 				actualSet[agentInstanceID] = entry
 			} else {
-				duplicates = append(duplicates, entry.workload)
+				immediateStops = append(immediateStops, entry.workload)
 			}
 			continue
 		}
 		actualSet[agentInstanceID] = entry
 	}
-	result := Actions{ToStop: duplicates}
+	result := Actions{ToStop: immediateStops}
 	for _, item := range desired {
+		if _, requested := stopRequests[item.AgentInstanceID]; requested {
+			continue
+		}
 		if _, ok := actualSet[item.AgentInstanceID]; !ok {
 			result.ToStart = append(result.ToStart, item)
 		}

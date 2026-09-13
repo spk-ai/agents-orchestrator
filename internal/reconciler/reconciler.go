@@ -40,6 +40,7 @@ type Reconciler struct {
 	workloadReconcileInterval time.Duration
 	idle                      time.Duration
 	stopSec                   uint32
+	stopInactiveInstances     bool
 	// Optional: without them nothing is minted and the spec keeps whatever
 	// pull credentials it already carried.
 	imageProxy     ImageProxyClient
@@ -71,6 +72,7 @@ type Config struct {
 	WorkloadReconcileInterval time.Duration
 	Idle                      time.Duration
 	StopSec                   uint32
+	StopInactiveInstances     bool
 	MeteringSampleInterval    time.Duration
 	PlatformIdentityID        uuid.UUID
 }
@@ -92,6 +94,7 @@ func New(cfg Config) *Reconciler {
 		workloadReconcileInterval: cfg.WorkloadReconcileInterval,
 		idle:                      cfg.Idle,
 		stopSec:                   cfg.StopSec,
+		stopInactiveInstances:     cfg.StopInactiveInstances,
 		platformIdentityID:        cfg.PlatformIdentityID,
 	}
 }
@@ -150,7 +153,11 @@ func (r *Reconciler) reconcile(ctx context.Context) error {
 	if err := r.addIdleTimeoutsForWorkloads(ctx, actual, idleTimeouts); err != nil {
 		return err
 	}
-	actions, err := ComputeActions(desired, actual, idleTimeouts, r.idle, time.Now().UTC())
+	stopRequests, err := r.inactiveInstanceStopRequests(ctx, desired, actual)
+	if err != nil {
+		return err
+	}
+	actions, err := ComputeActions(desired, actual, stopRequests, idleTimeouts, r.idle, time.Now().UTC())
 	if err != nil {
 		return err
 	}

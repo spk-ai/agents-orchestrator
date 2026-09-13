@@ -13,6 +13,7 @@ type agentsClient interface {
 	GetEnvironment(context.Context, *agentsv1.GetEnvironmentRequest, ...grpc.CallOption) (*agentsv1.GetEnvironmentResponse, error)
 	ListAgents(context.Context, *agentsv1.ListAgentsRequest, ...grpc.CallOption) (*agentsv1.ListAgentsResponse, error)
 	ListInstances(context.Context, *agentsv1.ListInstancesRequest, ...grpc.CallOption) (*agentsv1.ListInstancesResponse, error)
+	GetInstance(context.Context, *agentsv1.GetInstanceRequest, ...grpc.CallOption) (*agentsv1.GetInstanceResponse, error)
 	GetUnackedInboxItems(context.Context, *agentsv1.GetUnackedInboxItemsRequest, ...grpc.CallOption) (*agentsv1.GetUnackedInboxItemsResponse, error)
 	SetSandboxLayoutDirectories(context.Context, *agentsv1.SetSandboxLayoutDirectoriesRequest, ...grpc.CallOption) (*agentsv1.SetSandboxLayoutDirectoriesResponse, error)
 	PauseInstance(context.Context, *agentsv1.PauseInstanceRequest, ...grpc.CallOption) (*agentsv1.PauseInstanceResponse, error)
