@@ -631,7 +631,21 @@ func (a *Assembler) Assemble(ctx context.Context, agentID, agentInstanceID, thre
 	if err != nil {
 		return nil, fmt.Errorf("assign mcp ports: %w", err)
 	}
-	allocatedCPU, allocatedRAM, err := sumAllocatedResources(agent, mcpAssignments)
+	mainResources := agent.GetResources()
+	boundedResources := requiresComputeResources(agent.GetCapabilities())
+	if boundedResources {
+		resources := flavor.GetResources()
+		if resources == nil {
+			return nil, fmt.Errorf("compute-resources requires a flavor with explicit resource bounds")
+		}
+		mainResources = &agentsv1.ComputeResources{RequestsCpu: resources.GetRequestsCpu(), RequestsMemory: resources.GetRequestsMemory(),
+			LimitsCpu: resources.GetLimitsCpu(), LimitsMemory: resources.GetLimitsMemory()}
+		main.Resources, err = runnerComputeResources(mainResources)
+		if err != nil {
+			return nil, fmt.Errorf("flavor %s resources: %w", flavor.GetName(), err)
+		}
+	}
+	allocatedCPU, allocatedRAM, err := sumAllocatedResources(agent, mcpAssignments, mainResources)
 	if err != nil {
 		return nil, err
 	}
@@ -643,6 +657,12 @@ func (a *Assembler) Assemble(ctx context.Context, agentID, agentInstanceID, thre
 		sidecar, err := a.buildMcpSidecar(ctx, resolver, volumeResolver, rewriter, assignment.mcp, assignment.port)
 		if err != nil {
 			return nil, err
+		}
+		if boundedResources {
+			sidecar.Resources, err = runnerComputeResources(assignment.mcp.GetResources())
+			if err != nil {
+				return nil, fmt.Errorf("mcp %s resources: %w", assignment.id, err)
+			}
 		}
 		sidecars = append(sidecars, sidecar)
 		mcpServers = append(mcpServers, fmt.Sprintf("%s:%d", assignment.name, assignment.port))
