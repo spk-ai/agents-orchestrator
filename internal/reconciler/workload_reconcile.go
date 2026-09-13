@@ -238,7 +238,7 @@ func (r *Reconciler) handleMissingRunnerWorkload(ctx context.Context, runnerClie
 		}
 	}
 	terminal := workload.GetStatus()
-	req := &runnersv1.UpdateWorkloadRequest{Id: workloadID, RemovedAt: timestamppb.New(time.Now().UTC())}
+	req := &runnersv1.UpdateWorkloadRequest{Id: workloadID, RemovalConfirmedAt: timestamppb.New(time.Now().UTC())}
 	switch workload.GetStatus() {
 	case runnersv1.WorkloadStatus_WORKLOAD_STATUS_STARTING,
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING:
@@ -254,11 +254,17 @@ func (r *Reconciler) handleMissingRunnerWorkload(ctx context.Context, runnerClie
 		return fmt.Errorf("workload %s has unspecified status", workloadID)
 	}
 	req.Status = &terminal
-	if _, err := r.runners.UpdateWorkload(ctx, req); err != nil {
+	response, err := r.runners.UpdateWorkload(ctx, req)
+	if err != nil {
 		return err
 	}
-	workload.Status = terminal
-	workload.RemovedAt = req.RemovedAt
+	confirmed := response.GetWorkload()
+	if confirmed.GetMeta().GetId() != workloadID || confirmed.GetStatus() != terminal ||
+		confirmed.GetRemovalConfirmedAt() == nil || confirmed.GetRemovalConfirmedAt().CheckValid() != nil {
+		return fmt.Errorf("workload %s removal confirmation was not persisted by Runners", workloadID)
+	}
+	workload.Status = confirmed.GetStatus()
+	workload.RemovalConfirmedAt = confirmed.GetRemovalConfirmedAt()
 	r.revokePullCredential(ctx, workloadID)
 	if r.zitiMgmt != nil && workload.GetZitiIdentityId() != "" {
 		return r.deleteIdentity(ctx, workload.GetZitiIdentityId())
@@ -347,7 +353,7 @@ func (r *Reconciler) handlePresentRunnerWorkload(ctx context.Context, runnerClie
 			workload.InstanceId = updateReq.InstanceId
 		}
 	}
-	if workload.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING || workload.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED {
+	if workload.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING || workload.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED || workload.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED {
 		return r.stopWorkloadOnRunner(ctx, runnerClient, workload)
 	}
 	return nil

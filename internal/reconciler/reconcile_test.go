@@ -965,8 +965,8 @@ func TestReconcileWorkloadsDegradesUnenrolledRunner(t *testing.T) {
 			if req.GetStatus() != runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED {
 				return nil, errors.New("unexpected workload status")
 			}
-			if req.GetRemovedAt() == nil {
-				return nil, errors.New("missing removed_at")
+			if req.GetRemovalConfirmedAt() == nil {
+				return nil, errors.New("missing removal_confirmed_at")
 			}
 			return &runnersv1.UpdateWorkloadResponse{}, nil
 		},
@@ -1355,7 +1355,7 @@ func TestReconcileVolumesTTLExpires(t *testing.T) {
 			}
 			removedAt := timestamppb.New(time.Now().Add(-2 * time.Hour))
 			return &runnersv1.ListWorkloadsByThreadResponse{Workloads: []*runnersv1.Workload{
-				{Meta: &runnersv1.EntityMeta{Id: "workload-1"}, Status: runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED, RemovedAt: removedAt},
+				{Meta: &runnersv1.EntityMeta{Id: "workload-1"}, Status: runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED, RemovedAt: removedAt, RemovalConfirmedAt: removedAt},
 			}}, nil
 		},
 	}
@@ -2036,8 +2036,8 @@ func TestReconcileSandboxIdleStopClearsRuntimeWorkload(t *testing.T) {
 		listVolumes: func(context.Context, *runnersv1.ListVolumesRequest, ...grpc.CallOption) (*runnersv1.ListVolumesResponse, error) {
 			return &runnersv1.ListVolumesResponse{}, nil
 		},
-		updateWorkload: func(context.Context, *runnersv1.UpdateWorkloadRequest, ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
-			return &runnersv1.UpdateWorkloadResponse{}, nil
+		updateWorkload: func(_ context.Context, req *runnersv1.UpdateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
+			return acknowledgedWorkloadUpdate(req), nil
 		},
 	}
 	runner := &fakeRunnerClient{inspectWorkload: absentRunnerWorkload, stopWorkload: func(context.Context, *runnerv1.StopWorkloadRequest, ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error) {
@@ -2375,7 +2375,7 @@ func TestReconcileSandboxStoppedStopsActiveWorkloadWhenNotIdle(t *testing.T) {
 			if req.Status != nil {
 				workloadStatuses = append(workloadStatuses, req.GetStatus())
 			}
-			return &runnersv1.UpdateWorkloadResponse{}, nil
+			return acknowledgedWorkloadUpdate(req), nil
 		},
 	}
 	runner := &fakeRunnerClient{inspectWorkload: absentRunnerWorkload, stopWorkload: func(_ context.Context, req *runnerv1.StopWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error) {

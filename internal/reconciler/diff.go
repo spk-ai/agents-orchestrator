@@ -61,7 +61,7 @@ func ComputeActions(desired []AgentInstanceTarget, actual []*runnersv1.Workload,
 		}
 	}
 	for agentInstanceID, entry := range actualSet {
-		if entry.workload.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING || entry.workload.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED {
+		if entry.workload.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING || entry.workload.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED || entry.workload.GetStatus() == runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED {
 			result.ToStop = append(result.ToStop, entry.workload)
 			continue
 		}
