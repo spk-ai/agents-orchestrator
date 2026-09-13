@@ -20,11 +20,22 @@ func absentRunnerWorkload(context.Context, *runnerv1.InspectWorkloadRequest, ...
 	return nil, status.Error(codes.NotFound, "removed")
 }
 
+func acknowledgedWorkloadUpdate(req *runnersv1.UpdateWorkloadRequest) *runnersv1.UpdateWorkloadResponse {
+	return &runnersv1.UpdateWorkloadResponse{Workload: &runnersv1.Workload{
+		Meta: &runnersv1.EntityMeta{Id: req.GetId()}, Status: req.GetStatus(),
+		RemovalConfirmedAt: req.GetRemovalConfirmedAt(),
+	}}
+}
+
 func TestStopWorkloadRequiresConfirmedRemoval(t *testing.T) {
-	for _, initial := range []runnersv1.WorkloadStatus{runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING, runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED} {
+	for _, initial := range []runnersv1.WorkloadStatus{runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING, runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED, runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED} {
 		t.Run(initial.String(), func(t *testing.T) {
 			workloadID := uuid.NewString()
 			workload := &runnersv1.Workload{Meta: &runnersv1.EntityMeta{Id: workloadID}, RunnerId: "runner", ZitiIdentityId: "identity", Status: initial}
+			billingEnd := timestamppb.New(time.Now().Add(-time.Hour))
+			if initial != runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING {
+				workload.RemovedAt = billingEnd
+			}
 			phase := "present"
 			removals, deletes, stops := 0, 0, 0
 			runner := &fakeRunnerClient{
@@ -55,11 +66,25 @@ func TestStopWorkloadRequiresConfirmedRemoval(t *testing.T) {
 				RunnerDialer: &fakeRunnerDialer{dial: func(context.Context, string) (runnerv1.RunnerServiceClient, error) { return runner, nil }},
 				Runners: &fakeRunnersClient{updateWorkload: func(_ context.Context, req *runnersv1.UpdateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
 					if req.GetRemovedAt() != nil {
-						if phase != "gone" && phase != "store unavailable" {
+						t.Fatal("physical confirmation must not overwrite billing end")
+					}
+					if req.GetRemovalConfirmedAt() != nil {
+						if phase != "gone" && phase != "store unavailable" && phase != "old server" && phase != "wrong workload" {
 							t.Fatal("removal written before physical confirmation")
 						}
 						if phase == "store unavailable" {
 							return nil, errors.New("store unavailable")
+						}
+						if phase == "old server" {
+							response := acknowledgedWorkloadUpdate(req)
+							response.Workload.RemovalConfirmedAt = nil
+							response.Workload.RemovedAt = billingEnd
+							return response, nil
+						}
+						if phase == "wrong workload" {
+							response := acknowledgedWorkloadUpdate(req)
+							response.Workload.Meta.Id = "another-workload"
+							return response, nil
 						}
 						removals++
 						want := runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED
@@ -70,7 +95,7 @@ func TestStopWorkloadRequiresConfirmedRemoval(t *testing.T) {
 							t.Fatalf("terminal status %v, want %v", req.GetStatus(), want)
 						}
 					}
-					return &runnersv1.UpdateWorkloadResponse{}, nil
+					return acknowledgedWorkloadUpdate(req), nil
 				}},
 				ZitiMgmt: &fakeZitiMgmtClient{deleteIdentity: func(context.Context, *zitimgmtv1.DeleteIdentityRequest, ...grpc.CallOption) (*zitimgmtv1.DeleteIdentityResponse, error) {
 					if phase != "gone" || removals == 0 {
@@ -80,12 +105,12 @@ func TestStopWorkloadRequiresConfirmedRemoval(t *testing.T) {
 					return &zitimgmtv1.DeleteIdentityResponse{}, nil
 				}},
 			})
-			for _, next := range []string{"present", "unavailable", "alias present", "store unavailable"} {
+			for _, next := range []string{"present", "unavailable", "alias present", "store unavailable", "old server", "wrong workload"} {
 				phase = next
 				if err := r.stopWorkloadWithContext(context.Background(), workload); err == nil {
 					t.Fatalf("%s: expected pending/error", phase)
 				}
-				if workload.GetRemovedAt() != nil || removals != 0 || deletes != 0 {
+				if workload.GetRemovalConfirmedAt() != nil || removals != 0 || deletes != 0 {
 					t.Fatalf("%s: workload incorrectly settled", phase)
 				}
 			}
@@ -93,8 +118,11 @@ func TestStopWorkloadRequiresConfirmedRemoval(t *testing.T) {
 			if err := r.stopWorkloadWithContext(context.Background(), workload); err != nil {
 				t.Fatal(err)
 			}
-			if removals != 1 || deletes != 1 || stops != 5 || workload.GetRemovedAt() == nil {
+			if removals != 1 || deletes != 1 || stops != 7 || workload.GetRemovalConfirmedAt() == nil {
 				t.Fatalf("unexpected settlement: removals=%d deletes=%d stops=%d", removals, deletes, stops)
+			}
+			if initial != runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING && workload.RemovedAt != billingEnd {
+				t.Fatal("confirmation changed the billing timestamp")
 			}
 		})
 	}
@@ -118,34 +146,40 @@ func TestMissingWorkloadMustBeAbsentUnderBothIDs(t *testing.T) {
 	}
 }
 
-func TestFailedUnremovedWorkloadsRemainTracked(t *testing.T) {
-	now := time.Now()
-	agentID, instanceID := uuid.MustParse(testAgentID), uuid.New()
-	pending := makeWorkload(agentID, instanceID, now, &now)
-	pending.OrganizationId = testOrganizationID
-	pending.Status = runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED
-	pending.RunnerId = "runner"
-	removed := makeWorkload(agentID, instanceID, now, &now)
-	removed.OrganizationId = testOrganizationID
-	removed.Status = runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED
-	removed.RemovedAt = timestamppb.Now()
-	r := newTestReconciler(Config{Runners: &fakeRunnersClient{listWorkloads: func(_ context.Context, req *runnersv1.ListWorkloadsRequest, _ ...grpc.CallOption) (*runnersv1.ListWorkloadsResponse, error) {
-		found := false
-		for _, state := range req.GetFilter().GetStatusIn() {
-			found = found || state == runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED
-		}
-		if !found {
-			t.Fatal("failed workloads omitted from reconciliation query")
-		}
-		return &runnersv1.ListWorkloadsResponse{Workloads: []*runnersv1.Workload{pending, removed}}, nil
-	}}})
-	actual, err := r.fetchActual(context.Background())
-	if err != nil || len(actual) != 1 || actual[0] != pending {
-		t.Fatalf("unexpected actual workloads: %v, %v", actual, err)
-	}
-	actions, err := ComputeActions([]AgentInstanceTarget{{AgentID: agentID, AgentInstanceID: instanceID}}, actual, nil, time.Hour, now)
-	if err != nil || len(actions.ToStart) != 0 || len(actions.ToStop) != 1 || actions.ToStop[0] != pending {
-		t.Fatalf("failed workload must stop before replacement: %v, %v", actions, err)
+func TestTerminalUnconfirmedWorkloadsRemainTracked(t *testing.T) {
+	for _, terminal := range []runnersv1.WorkloadStatus{runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED, runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED} {
+		t.Run(terminal.String(), func(t *testing.T) {
+			now := time.Now()
+			agentID, instanceID := uuid.MustParse(testAgentID), uuid.New()
+			pending := makeWorkload(agentID, instanceID, now, &now)
+			pending.OrganizationId = testOrganizationID
+			pending.Status = terminal
+			pending.RemovedAt = timestamppb.New(now.Add(-time.Hour))
+			pending.RunnerId = "runner"
+			removed := makeWorkload(agentID, instanceID, now, &now)
+			removed.OrganizationId = testOrganizationID
+			removed.Status = terminal
+			removed.RemovedAt = timestamppb.Now()
+			removed.RemovalConfirmedAt = timestamppb.Now()
+			r := newTestReconciler(Config{Runners: &fakeRunnersClient{listWorkloads: func(_ context.Context, req *runnersv1.ListWorkloadsRequest, _ ...grpc.CallOption) (*runnersv1.ListWorkloadsResponse, error) {
+				found := false
+				for _, state := range req.GetFilter().GetStatusIn() {
+					found = found || state == terminal
+				}
+				if !found {
+					t.Fatal("terminal workloads omitted from reconciliation query")
+				}
+				return &runnersv1.ListWorkloadsResponse{Workloads: []*runnersv1.Workload{pending, removed}}, nil
+			}}})
+			actual, err := r.fetchActual(context.Background())
+			if err != nil || len(actual) != 1 || actual[0] != pending {
+				t.Fatalf("unexpected actual workloads: %v, %v", actual, err)
+			}
+			actions, err := ComputeActions([]AgentInstanceTarget{{AgentID: agentID, AgentInstanceID: instanceID}}, actual, nil, time.Hour, now)
+			if err != nil || len(actions.ToStart) != 0 || len(actions.ToStop) != 1 || actions.ToStop[0] != pending {
+				t.Fatalf("unconfirmed workload must stop before replacement: %v, %v", actions, err)
+			}
+		})
 	}
 }
 
@@ -154,10 +188,10 @@ func TestVolumeTTLWaitsForEveryWorkloadRemoval(t *testing.T) {
 		t.Run(state.String(), func(t *testing.T) {
 			instanceID := uuid.NewString()
 			old := timestamppb.New(time.Now().Add(-2 * time.Hour))
-			pending := &runnersv1.Workload{Meta: &runnersv1.EntityMeta{Id: "pending", UpdatedAt: old}, Status: state}
+			pending := &runnersv1.Workload{Meta: &runnersv1.EntityMeta{Id: "pending", UpdatedAt: old}, Status: state, RemovedAt: old}
 			r := newTestReconciler(Config{Runners: &fakeRunnersClient{listWorkloadsByAgentInstance: func(context.Context, *runnersv1.ListWorkloadsByAgentInstanceRequest, ...grpc.CallOption) (*runnersv1.ListWorkloadsByAgentInstanceResponse, error) {
 				return &runnersv1.ListWorkloadsByAgentInstanceResponse{Workloads: []*runnersv1.Workload{
-					{Meta: &runnersv1.EntityMeta{Id: "old"}, Status: runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED, RemovedAt: old}, pending,
+					{Meta: &runnersv1.EntityMeta{Id: "old"}, Status: runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED, RemovedAt: old, RemovalConfirmedAt: old}, pending,
 				}}, nil
 			}}})
 			ttl := time.Hour
@@ -166,9 +200,9 @@ func TestVolumeTTLWaitsForEveryWorkloadRemoval(t *testing.T) {
 			for _, stage := range []string{"unconfirmed", "just removed", "retention elapsed"} {
 				if stage == "just removed" {
 					pending.Status = runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED
-					pending.RemovedAt = timestamppb.Now()
+					pending.RemovalConfirmedAt = timestamppb.Now()
 				} else if stage == "retention elapsed" {
-					pending.RemovedAt = old
+					pending.RemovalConfirmedAt = old
 				}
 				expired, err := r.volumeTTLExpired(context.Background(), volume, info, map[string]instanceActivity{})
 				if err != nil || expired != (stage == "retention elapsed") {

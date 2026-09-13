@@ -75,6 +75,28 @@ func TestShouldStartWorkloadSkipsActiveWorkloads(t *testing.T) {
 	}
 }
 
+func TestShouldStartWorkloadWaitsForPhysicalRemovalAfterBillingEnds(t *testing.T) {
+	for _, terminal := range []runnersv1.WorkloadStatus{runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED, runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED} {
+		t.Run(terminal.String(), func(t *testing.T) {
+			now := time.Now().UTC()
+			agentID, instanceID := uuid.New(), uuid.New()
+			workload := makeDecisionWorkload("previous", terminal, now.Add(-2*time.Hour), now.Add(-time.Hour))
+			workload.RemovalConfirmedAt = nil
+			fixture := startDecisionFixture{t: t, agentInstanceID: instanceID, active: []*runnersv1.Workload{workload}}
+			r := newTestReconciler(Config{Runners: &fakeRunnersClient{listWorkloadsByAgentInstance: fixture.list}})
+			for _, confirmed := range []bool{false, true} {
+				if confirmed {
+					workload.RemovalConfirmedAt = timestamppb.Now()
+				}
+				start, err := r.shouldStartWorkload(context.Background(), AgentInstanceTarget{AgentID: agentID, AgentInstanceID: instanceID}, now, map[uuid.UUID]time.Time{})
+				if err != nil || start != confirmed {
+					t.Fatalf("confirmed=%t start=%t err=%v", confirmed, start, err)
+				}
+			}
+		})
+	}
+}
+
 func TestShouldStartWorkloadAllowsStoppedOrEmpty(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -321,6 +343,7 @@ func (f startDecisionFixture) list(_ context.Context, req *runnersv1.ListWorkloa
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING,
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED,
+		runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED,
 	}):
 		return &runnersv1.ListWorkloadsByAgentInstanceResponse{Workloads: f.active}, nil
 	case matchStatuses(statuses, []runnersv1.WorkloadStatus{
@@ -364,6 +387,7 @@ func makeDecisionWorkload(id string, status runnersv1.WorkloadStatus, createdAt 
 	}
 	if !removedAt.IsZero() {
 		workload.RemovedAt = timestamppb.New(removedAt)
+		workload.RemovalConfirmedAt = timestamppb.New(removedAt)
 	}
 	return workload
 }

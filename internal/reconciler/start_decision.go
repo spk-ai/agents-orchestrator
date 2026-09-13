@@ -27,12 +27,13 @@ func (r *Reconciler) shouldStartWorkload(ctx context.Context, target AgentInstan
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING,
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED,
+		runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED,
 	}, 0)
 	if err != nil {
 		return false, err
 	}
 	for _, workload := range active {
-		if workload.GetRemovedAt() == nil {
+		if workload.GetRemovalConfirmedAt() == nil {
 			return false, nil
 		}
 	}
@@ -200,8 +201,8 @@ func workloadCreatedAt(workload *runnersv1.Workload) (time.Time, error) {
 	return createdAt.AsTime().UTC(), nil
 }
 
-// workloadEndedAt is when a terminal workload ended. Runner-reported failures
-// carry no removed_at; the row's updated_at is when the report landed.
+// Backoff uses the metered lifetime, after removal is independently confirmed.
+// Older runner-reported failures may only have the row update timestamp.
 func workloadEndedAt(workload *runnersv1.Workload) (time.Time, error) {
 	if removedAt := workload.GetRemovedAt(); removedAt != nil {
 		return removedAt.AsTime().UTC(), nil

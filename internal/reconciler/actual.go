@@ -44,6 +44,7 @@ func (r *Reconciler) listActiveWorkloads(ctx context.Context, organizations map[
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING,
 		runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED,
+		runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPED,
 	}
 	for {
 		resp, err := r.runners.ListWorkloads(ctx, &runnersv1.ListWorkloadsRequest{
@@ -72,7 +73,7 @@ func (r *Reconciler) listActiveWorkloads(ctx context.Context, organizations map[
 			if meta.GetId() == "" {
 				return nil, fmt.Errorf("workload meta id missing")
 			}
-			if workload.GetRemovedAt() != nil {
+			if workload.GetRemovalConfirmedAt() != nil {
 				continue
 			}
 			orgID := strings.TrimSpace(workload.GetOrganizationId())
