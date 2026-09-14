@@ -603,7 +603,7 @@ func (a *Assembler) Assemble(ctx context.Context, agentID, agentInstanceID, thre
 			Image:      a.cfg.ZitiSidecarImage,
 			Name:       zitiWaitContainerName,
 			Entrypoint: zitiSidecarEntrypoint,
-			Cmd:        buildZitiWaitCommand(a.cfg.AgentGatewayAddress, llmProxyTarget, a.cfg.WorkloadDNSUpstream),
+			Cmd:        buildZitiWaitCommand(a.cfg.AgentGatewayAddress, llmProxyTarget),
 		}
 		applyEgressCA(zitiEnroll, a.egressCACert)
 		applyEgressCA(zitiSidecar, a.egressCACert)
@@ -700,8 +700,10 @@ func (a *Assembler) Assemble(ctx context.Context, agentID, agentInstanceID, thre
 		},
 	}
 	if a.cfg.ZitiEnabled {
+		// Parallel resolvers (including musl) can bypass interception if an
+		// ordinary nameserver is listed here. The tunnel forwards other names.
 		request.DnsConfig = &runnerv1.DnsConfig{
-			Nameservers: []string{zitiDNSNameserver, a.cfg.WorkloadDNSUpstream},
+			Nameservers: []string{zitiDNSNameserver},
 			Searches:    []string{zitiDNSSearchService, zitiDNSSearchCluster},
 		}
 	}
@@ -1008,12 +1010,12 @@ func gatewayHost(address string) (string, error) {
 	return host, nil
 }
 
-func buildZitiWaitCommand(address string, llmProxy zitiServiceTarget, workloadDNSUpstream string) []string {
+func buildZitiWaitCommand(address string, llmProxy zitiServiceTarget) []string {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		panic(fmt.Sprintf("parse gateway address %q: %v", address, err))
 	}
-	return buildZitiTCPWaitCommand(zitiWaitTimeoutSeconds, []zitiServiceTarget{{host: host, port: port}, llmProxy}, workloadDNSUpstream)
+	return buildZitiTCPWaitCommand(zitiWaitTimeoutSeconds, []zitiServiceTarget{{host: host, port: port}, llmProxy})
 }
 
 type zitiServiceTarget struct {
@@ -1060,11 +1062,10 @@ func zitiServiceWaitTarget(rawURL string) (zitiServiceTarget, error) {
 // target that is already up costs nothing -- but each miss used to overshoot by
 // a full second past the moment the mesh became ready. The attempt count is
 // scaled by the same factor, so the timeout budget in seconds is unchanged.
-func buildZitiTCPWaitCommand(timeoutSeconds int, targets []zitiServiceTarget, workloadDNSUpstream string) []string {
+func buildZitiTCPWaitCommand(timeoutSeconds int, targets []zitiServiceTarget) []string {
 	resolverConfig := fmt.Sprintf(
-		"nameserver %s\nnameserver %s\nsearch svc.cluster.local cluster.local\noptions ndots:5 timeout:1 attempts:1\n",
+		"nameserver %s\nsearch svc.cluster.local cluster.local\noptions ndots:5 timeout:1 attempts:1\n",
 		zitiDNSNameserver,
-		workloadDNSUpstream,
 	)
 	specs := make([]string, 0, len(targets))
 	for _, target := range targets {

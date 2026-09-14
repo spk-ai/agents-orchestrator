@@ -88,6 +88,9 @@ func TestAssemblerMainContainer(t *testing.T) {
 		t.Fatalf("expected no runner labels, got %v", result.RunnerLabels)
 	}
 	request := result.Request
+	if request.DnsConfig != nil {
+		t.Fatal("Ziti-disabled agent DNS behavior changed")
+	}
 	if request.Main == nil {
 		t.Fatal("expected main container")
 	}
@@ -258,7 +261,7 @@ func TestAssemblerAddsZitiSidecar(t *testing.T) {
 	if request.DnsConfig == nil {
 		t.Fatal("expected dns config")
 	}
-	expectedNameservers := []string{zitiDNSNameserver, cfg.WorkloadDNSUpstream}
+	expectedNameservers := []string{zitiDNSNameserver}
 	if !equalStringSlice(request.DnsConfig.Nameservers, expectedNameservers) {
 		t.Fatalf("expected dns nameservers %+v, got %+v", expectedNameservers, request.DnsConfig.Nameservers)
 	}
@@ -410,7 +413,7 @@ func TestAssemblerAddsZitiSidecar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("llm proxy wait target: %v", err)
 	}
-	expectedWaitCmd := buildZitiWaitCommand(cfg.AgentGatewayAddress, llmTarget, cfg.WorkloadDNSUpstream)
+	expectedWaitCmd := buildZitiWaitCommand(cfg.AgentGatewayAddress, llmTarget)
 	if !equalStringSlice(zitiWait.Cmd, expectedWaitCmd) {
 		t.Fatalf("expected ziti wait cmd %+v, got %+v", expectedWaitCmd, zitiWait.Cmd)
 	}
@@ -427,9 +430,9 @@ func TestAssemblerAddsZitiSidecar(t *testing.T) {
 	if !strings.Contains(zitiWait.Cmd[1], `/dev/tcp/${h}/${p}`) {
 		t.Fatalf("expected ziti wait to connect to each target through the tunnel, got %+v", zitiWait.Cmd)
 	}
-	resolverConfig := "nameserver 127.0.0.1\nnameserver " + cfg.WorkloadDNSUpstream + "\nsearch svc.cluster.local cluster.local\noptions ndots:5 timeout:1 attempts:1\n"
+	resolverConfig := "nameserver 127.0.0.1\nsearch svc.cluster.local cluster.local\noptions ndots:5 timeout:1 attempts:1\n"
 	if !strings.Contains(zitiWait.Cmd[1], strconv.Quote(resolverConfig)) {
-		t.Fatalf("expected ziti wait to make tunnel DNS first in resolv.conf, got %+v", zitiWait.Cmd)
+		t.Fatalf("expected ziti wait to use only tunnel DNS in resolv.conf, got %+v", zitiWait.Cmd)
 	}
 	if !strings.Contains(zitiWait.Cmd[1], "dns lookup failed for") || !strings.Contains(zitiWait.Cmd[1], "tcp connect failed for") {
 		t.Fatalf("expected ziti wait diagnostics to distinguish DNS and TCP failures, got %+v", zitiWait.Cmd)
@@ -1756,7 +1759,7 @@ func TestZitiServiceWaitTargetsLLMProxyTCP(t *testing.T) {
 	if target.host != "llm-proxy.agyn" || target.port != "80" {
 		t.Fatalf("expected llm-proxy.agyn:80, got %s:%s", target.host, target.port)
 	}
-	cmd := buildZitiWaitCommand("gateway.agyn:443", target, "10.43.0.10")
+	cmd := buildZitiWaitCommand("gateway.agyn:443", target)
 	if !strings.Contains(cmd[1], "llm-proxy.agyn:80") {
 		t.Fatalf("expected ziti wait to name llm-proxy.agyn:80, got %+v", cmd)
 	}

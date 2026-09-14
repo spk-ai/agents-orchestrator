@@ -189,7 +189,7 @@ func (a *Assembler) AssembleSandbox(ctx context.Context, sandbox *agentsv1.Sandb
 			Image:      a.cfg.ZitiSidecarImage,
 			Name:       zitiWaitContainerName,
 			Entrypoint: zitiSidecarEntrypoint,
-			Cmd:        buildZitiWaitCommand(a.cfg.AgentGatewayAddress, llmProxyTarget, a.cfg.WorkloadDNSUpstream),
+			Cmd:        buildZitiWaitCommand(a.cfg.AgentGatewayAddress, llmProxyTarget),
 		}
 		applyEgressCA(zitiEnroll, a.egressCACert)
 		applyEgressCA(zitiSidecar, a.egressCACert)
@@ -218,7 +218,7 @@ func (a *Assembler) AssembleSandbox(ctx context.Context, sandbox *agentsv1.Sandb
 	}
 	if a.cfg.ZitiEnabled {
 		request.DnsConfig = &runnerv1.DnsConfig{
-			Nameservers: []string{zitiDNSNameserver, a.cfg.WorkloadDNSUpstream},
+			Nameservers: []string{zitiDNSNameserver},
 			Searches:    []string{zitiDNSSearchService, zitiDNSSearchCluster},
 		}
 	}
