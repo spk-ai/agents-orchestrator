@@ -37,8 +37,9 @@ The API and Runners service `feat/workload-removal-confirmation` branches add
 the explicit field and its storage. Generate against that API checkout for this
 branch; published BSR schemas and older Gateways do not yet carry the field.
 The AgentInstance lifecycle and its volume TTL use confirmation. Metering and
-failure backoff keep their existing billing timestamps. The separate sandbox
-reconciler's broader removal contract still needs migration and acceptance.
+failure backoff keep their existing billing timestamps. Sandbox planning also
+retains failed/stopped workloads without explicit removal confirmation; billing
+end alone cannot release their workspace or permit a replacement.
 
 ```sh
 cd ../api
@@ -51,6 +52,55 @@ go test ./...
 
 Other generated packages must already exist, as in the upstream build. No
 generated source or unrelated API changes belong in this contribution.
+
+## Checked Volume Lifecycle
+
+This dependent branch migrates agent-instance and sandbox volume creation,
+reuse, activation, failure compensation, TTL and termination to the checked
+registry/native RPCs. There is no legacy create/update/name-only-delete fallback.
+Existing open records must carry checked metadata and match the complete durable
+owner identity. Failed and confirmed-deleted generations require an explicit
+revision-checked reopen. Only newly created/reopened snapshots are eligible for
+provisioning failure compensation; stale revisions are not re-read or retried.
+
+Binding pins the runner's physical name, UID and persistent ownership labels.
+Sandbox adoption additionally verifies the user against the Agents sandbox
+record. Removal first commits a revision-checked intent, then sends its exact
+target to `RemoveVolumeChecked`. `PENDING` never closes the registry row. Only
+`ABSENT` followed by a matching registry confirmation does so. A subsequent
+reconciler resumes the stored intent, not a freshly discovered replacement UID.
+Malformed, stale or unsupported acknowledgements stop the attempt.
+
+Missing inventory, an unreachable runner and billing timestamps are not absence
+confirmation. Registry pagination rejects nil responses, duplicate IDs and
+cycles. Sandbox cleanup validates the complete owner-scoped listing before
+stopping duplicate workloads; terminated sandboxes remain discoverable until
+their workspace removal is confirmed. Unbound or legacy disks remain retained
+for explicit reconciliation rather than being guessed absent.
+
+Dependencies are not published or permanently deployed: generate the combined
+API `ec2bfed`, use checked runner integration `3c461c5`, and require Runners
+owner-admission guard `f05b479` with migrations `0017`-`0019`. This branch is based
+on orchestrator integration `f65a9f6`; review its incremental diff, not the entire
+acceptance stack as one upstream proposal. The checked flag/RPC alone does not
+prove the database admission guard is installed. Old records, all writers and
+already-issued deletion requests need an explicit drain/upgrade audit. Do not
+deploy this client against stock services or silently promote legacy records.
+
+This is not backend-incarnation authentication, late-create/node/storage fencing,
+ownership-aware garbage collection or a production rollout. A2A retains its own
+interrupted-execution quarantine and explicit recovery policy; reopening a
+volume is not permission to retry a possibly executed agent turn.
+
+Validation includes ordinary Go tests, checked lifecycle/compensation/ownership
+regressions, malformed page/reply cases and controller reconstruction after lost
+begin/native/confirm replies. The optional native fixture below exercises both
+agent and sandbox volume paths, but its registry and Agents clients are fakes.
+The full unfiltered race suite still fails in the unchanged
+`TestGroupMembershipConsumerLoopRetriesWithoutBlocking` fake subscription. The
+selected suite excluding exactly that test passes with the native gate enabled.
+`go vet ./...` also flags the existing `ctx = ctx` in `start_decision.go`;
+`go vet -assign=false ./...` passes, not the unfiltered command.
 
 ## Immediate Stop On Pause (Opt-in)
 
@@ -125,9 +175,9 @@ A nil, malformed or duplicate runner inventory is rejected in full for that
 runner before updating records or deleting disks. Both volume keys and physical
 instance names must be present and unique. Other runners can still reconcile.
 Valid tracked provisioning, persistent-volume reuse, TTL and deprovisioning
-continue through their existing paths. This change does not make those paths
-safe against stale requests, backend name reuse, node partitions or late creates;
-the runner API still lacks a caller-pinned deletion incarnation.
+use the checked lifecycle above. Name/UID binding and revision guards address
+stale deletion targets; backend routing, authorization, node partitions and late
+creates still require separate fencing and acceptance.
 
 Focused regression tests (generate the APIs as in the development setup first):
 
@@ -138,10 +188,11 @@ go test -race ./internal/reconciler -run '^TestReconcileVolumes' -count=1
 ### Native Runner Acceptance
 
 The optional live test uses a reviewed k8s-runner checkout's real `ListVolumes`
-and `RemoveVolume` over loopback gRPC, plus Kubernetes PVCs. The registry and
+and `RemoveVolumeChecked` over loopback gRPC, plus Kubernetes PVCs. The registry and
 Agents clients are deterministic fakes; this is not a deployed platform or
 database test. The native runner must also reject missing/duplicate PVC keys,
-instead of silently returning a partial inventory. No new API fields are needed.
+instead of silently returning a partial inventory. Both checkouts require the
+pending checked-volume API generation, not only the published baseline.
 
 Generate both repositories' APIs first. Build the native fixture inside the
 reviewed runner checkout so Go's internal-package boundary is preserved:
@@ -158,13 +209,19 @@ The explicit kubeconfig must permit creating a disposable namespace and
 impersonating its PVC-only test service account. The fixture refuses cross-
 namespace PVC or Secret-list access, exposes only two RPCs, and permits removal
 only of its own empty claims. No existing runner deployment is used or changed.
-Six 1 MiB claims name an absent storage class, so they acquire no backing disks;
+Seven 1 MiB claims name an absent storage class, so they acquire no backing disks;
 quota forbids any Pod. Namespace cleanup checks owned UIDs, unexpected objects
 and backing storage, then uses UID/resource-version deletion preconditions.
 Unknown data prevents cleanup instead of being removed. The control plane's
 credentials are never put in prompts, copied to another credential file, or
 passed as command arguments. This is trusted-local test infrastructure, not a
 production runner authentication or cleanup implementation.
+
+The fixture retains foreign/closed/untracked/late-created claims, refuses
+ambiguous inventory, and checks agent deletion across fresh reconciler objects.
+It then binds an unbound sandbox workspace with user ownership validation and
+checks pending/confirmed cleanup before sandbox finalization. These objects share
+explicit fake registry state; this is not process/database failover acceptance.
 
 ## Local Development
 

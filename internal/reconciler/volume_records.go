@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	agentsv1 "github.com/agynio/agents-orchestrator/.gen/go/agynio/api/agents/v1"
+	runnersv1 "github.com/agynio/agents-orchestrator/.gen/go/agynio/api/runners/v1"
 	"github.com/agynio/agents-orchestrator/internal/assembler"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -14,6 +15,7 @@ type volumeRecord struct {
 	id       string
 	volumeID string
 	sizeGB   string
+	checked  *runnersv1.Volume
 }
 
 func buildVolumeRecords(volumes []assembler.PersistentVolumeInfo) ([]volumeRecord, error) {

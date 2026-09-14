@@ -29,8 +29,7 @@ func TestReconcileVolumesRetainsUntrackedInventory(t *testing.T) {
 			candidate := f.volume("candidate", runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING)
 			f.records = []*runnersv1.Volume{anchor}
 			f.inventory = &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{
-				{VolumeKey: "anchor", InstanceId: "pvc-anchor"},
-				{VolumeKey: "candidate", InstanceId: "pvc-candidate"},
+				f.item("anchor"), f.item("candidate"),
 			}}
 			switch name {
 			case "foreign_agent_organization", "sandbox_only_organization":
@@ -79,7 +78,7 @@ func TestReconcileVolumesRetainsUntrackedInventory(t *testing.T) {
 }
 
 func TestReconcileVolumesRejectsInvalidInventory(t *testing.T) {
-	valid := &runnerv1.VolumeListItem{VolumeKey: "tracked", InstanceId: "pvc-tracked"}
+	valid := checkedTestInstance(checkedTestVolume("tracked", runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING), "pvc-tracked", "uid-tracked")
 	for _, tc := range []struct {
 		name      string
 		inventory *runnerv1.ListVolumesResponse
@@ -123,15 +122,14 @@ func TestReconcileVolumesRemovesOnlyTrackedDeprovisioningDisk(t *testing.T) {
 	f := newVolumeRetentionFixture(t)
 	f.records = []*runnersv1.Volume{f.volume("tracked", runnersv1.VolumeStatus_VOLUME_STATUS_DEPROVISIONING)}
 	f.inventory = &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{
-		{VolumeKey: "tracked", InstanceId: "pvc-tracked"},
-		{VolumeKey: "untracked", InstanceId: "pvc-untracked"},
+		f.item("tracked"), f.item("untracked"),
 	}}
 	f.reconcile(t)
 	if !slices.Equal(f.removed, []string{"pvc-tracked"}) {
 		t.Fatalf("only the tracked deletion may proceed, removed %v", f.removed)
 	}
-	if len(f.updated) != 0 {
-		t.Fatalf("remove acknowledgement alone must not close the record, updates %v", f.updated)
+	if len(f.updated) != 1 || f.updated[0].GetBeginRemoval() == nil || f.records[0].GetStatus() != runnersv1.VolumeStatus_VOLUME_STATUS_DEPROVISIONING {
+		t.Fatalf("remove acknowledgement must retain the committed pending intent, updates %v", f.updated)
 	}
 }
 
@@ -142,8 +140,7 @@ func TestReconcileVolumesRetainsForeignVolumeOnLaterRegistryPage(t *testing.T) {
 	foreign.OrganizationId = uuid.NewString()
 	f.records = []*runnersv1.Volume{anchor, foreign}
 	f.inventory = &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{
-		{VolumeKey: "anchor", InstanceId: "pvc-anchor"},
-		{VolumeKey: "foreign", InstanceId: "pvc-foreign"},
+		f.item("anchor"), f.item("foreign"),
 	}}
 	f.reconciler.runners.(*fakeRunnersClient).listVolumes = func(_ context.Context, req *runnersv1.ListVolumesRequest, _ ...grpc.CallOption) (*runnersv1.ListVolumesResponse, error) {
 		f.registryLists++
@@ -177,7 +174,7 @@ func TestReconcileVolumesInvalidInventoryDoesNotBlockOtherRunner(t *testing.T) {
 			return f.runner, nil
 		}
 		return &fakeRunnerClient{listVolumes: func(context.Context, *runnerv1.ListVolumesRequest, ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error) {
-			return &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{{VolumeKey: "healthy", InstanceId: "pvc-healthy"}}}, nil
+			return &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{f.item("healthy")}}, nil
 		}}, nil
 	}}
 	f.reconcile(t)
@@ -194,7 +191,7 @@ type volumeRetentionFixture struct {
 	beforeRunnerList func()
 	registryLists    int
 	runnerLists      int
-	updated          []*runnersv1.UpdateVolumeRequest
+	updated          []*runnersv1.UpdateVolumeCheckedRequest
 	removed          []string
 	ownerMutations   int
 }
@@ -210,9 +207,9 @@ func newVolumeRetentionFixture(t *testing.T) *volumeRetentionFixture {
 			}
 			return f.inventory, nil
 		},
-		removeVolume: func(_ context.Context, req *runnerv1.RemoveVolumeRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeResponse, error) {
-			f.removed = append(f.removed, req.GetVolumeName())
-			return &runnerv1.RemoveVolumeResponse{}, nil
+		removeVolumeChecked: func(_ context.Context, req *runnerv1.RemoveVolumeCheckedRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+			f.removed = append(f.removed, req.GetExpected().GetInstanceId())
+			return &runnerv1.RemoveVolumeCheckedResponse{State: runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_PENDING}, nil
 		},
 	}
 	runners := &fakeRunnersClient{
@@ -231,20 +228,11 @@ func newVolumeRetentionFixture(t *testing.T) *volumeRetentionFixture {
 			shared.OrganizationId = nil
 			return &runnersv1.ListRunnersResponse{Runners: []*runnersv1.Runner{shared}}, nil
 		},
-		updateVolume: func(_ context.Context, req *runnersv1.UpdateVolumeRequest, _ ...grpc.CallOption) (*runnersv1.UpdateVolumeResponse, error) {
-			f.updated = append(f.updated, proto.Clone(req).(*runnersv1.UpdateVolumeRequest))
+		updateVolumeChecked: func(_ context.Context, req *runnersv1.UpdateVolumeCheckedRequest, _ ...grpc.CallOption) (*runnersv1.UpdateVolumeCheckedResponse, error) {
+			f.updated = append(f.updated, proto.Clone(req).(*runnersv1.UpdateVolumeCheckedRequest))
 			for _, record := range f.records {
 				if record.GetMeta().GetId() == req.GetId() {
-					if req.Status != nil {
-						record.Status = req.GetStatus()
-					}
-					if req.InstanceId != nil {
-						record.InstanceId = stringPtr(req.GetInstanceId())
-					}
-					if req.RemovedAt != nil {
-						record.RemovedAt = req.RemovedAt
-					}
-					return &runnersv1.UpdateVolumeResponse{Volume: proto.Clone(record).(*runnersv1.Volume)}, nil
+					return checkedTestUpdate(t, record, req), nil
 				}
 			}
 			t.Fatalf("update for unknown volume %q", req.GetId())
@@ -277,12 +265,11 @@ func newVolumeRetentionFixture(t *testing.T) *volumeRetentionFixture {
 }
 
 func (f *volumeRetentionFixture) volume(key string, state runnersv1.VolumeStatus) *runnersv1.Volume {
-	return &runnersv1.Volume{
-		Meta: &runnersv1.EntityMeta{Id: key}, Status: state, InstanceId: stringPtr("pvc-" + key),
-		RunnerId: "runner-1", OrganizationId: testOrganizationID,
-		OwnerKind: runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE, OwnerId: testAgentID,
-		AgentId: testAgentID, AgentInstanceId: stringPtr(testAgentID), VolumeId: "definition-1",
-	}
+	return checkedTestVolume(key, state)
+}
+
+func (f *volumeRetentionFixture) item(key string) *runnerv1.VolumeListItem {
+	return checkedTestInstance(f.volume(key, runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING), "pvc-"+key, "uid-"+key)
 }
 
 func (f *volumeRetentionFixture) reconcile(t *testing.T) {

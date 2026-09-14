@@ -3,13 +3,9 @@ package reconciler
 import (
 	"context"
 	"log"
-	"time"
 
 	runnersv1 "github.com/agynio/agents-orchestrator/.gen/go/agynio/api/runners/v1"
 	"github.com/agynio/agents-orchestrator/internal/assembler"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func workloadStatusPtr(status runnersv1.WorkloadStatus) *runnersv1.WorkloadStatus {
@@ -57,16 +53,14 @@ func (r *Reconciler) markVolumeRecordsFailed(ctx context.Context, records []volu
 	if len(records) == 0 {
 		return
 	}
-	status := runnersv1.VolumeStatus_VOLUME_STATUS_FAILED
-	removedAt := timestamppb.New(time.Now().UTC())
 	for _, record := range records {
-		if record.id == "" {
+		if record.checked == nil || record.checked.GetMeta().GetId() != record.id {
 			continue
 		}
-		_, err := r.runners.UpdateVolume(ctx, &runnersv1.UpdateVolumeRequest{
-			Id:        record.id,
-			Status:    &status,
-			RemovedAt: removedAt,
+		// Use only the revision returned to this attempt. A fresh read here
+		// could compensate a different workload's provisioning generation.
+		_, err := r.updateCheckedVolume(ctx, record.checked, &runnersv1.UpdateVolumeCheckedRequest{
+			Operation: &runnersv1.UpdateVolumeCheckedRequest_FailProvisioning{FailProvisioning: &runnersv1.FailVolumeProvisioning{}},
 		})
 		if err != nil {
 			log.Printf("reconciler: update volume %s to failed: %v", record.id, err)
@@ -134,45 +128,31 @@ func (r *Reconciler) createVolumeRecords(ctx context.Context, records []volumeRe
 			AgentClassId:       &agentClassID,
 			AgentInstanceId:    &agentInstanceID,
 		}
-		if _, err := r.runners.CreateVolume(ctx, req); err != nil {
-			if status.Code(err) != codes.AlreadyExists {
-				return created, err
-			}
-			if err := r.prepareExistingVolumeRecord(ctx, req); err != nil {
-				return created, err
-			}
-			continue
+		checked, owned, err := r.createOrReuseCheckedVolume(ctx, req)
+		if err != nil {
+			return created, err
 		}
-		created = append(created, record)
+		if owned {
+			record.checked = checked
+			created = append(created, record)
+		}
 	}
 	return created, nil
 }
 
-func (r *Reconciler) prepareExistingVolumeRecord(ctx context.Context, req *runnersv1.CreateVolumeRequest) error {
+func (r *Reconciler) prepareExistingVolumeRecord(ctx context.Context, req *runnersv1.CreateVolumeRequest) (*runnersv1.Volume, error) {
 	resp, err := r.runners.GetVolume(ctx, &runnersv1.GetVolumeRequest{Id: req.GetId()})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	volume := resp.GetVolume()
-	if volume == nil {
-		return ErrInvalidVolumeRecord
+	if err := validateCheckedVolume(volume); err != nil {
+		return nil, err
 	}
-	if volume.GetThreadId() != req.GetThreadId() ||
-		volume.GetAgentId() != req.GetAgentId() ||
-		volume.GetRunnerId() != req.GetRunnerId() ||
-		volume.GetVolumeId() != req.GetVolumeId() ||
-		volume.GetOrganizationId() != req.GetOrganizationId() ||
-		volume.GetOwnerKind() != req.GetOwnerKind() ||
-		volume.GetOwnerId() != req.GetOwnerId() {
-		return ErrInvalidVolumeRecord
+	if !volumeMatchesRequest(volume, req) {
+		return nil, ErrInvalidVolumeRecord
 	}
-	switch volume.GetStatus() {
-	case runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING,
-		runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE:
-		return nil
-	default:
-		return ErrInvalidVolumeRecord
-	}
+	return volume, nil
 }
 
 var ErrInvalidVolumeRecord = errInvalidVolumeRecord{}
