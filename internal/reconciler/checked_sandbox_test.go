@@ -48,7 +48,7 @@ func TestCheckedSandboxTerminationResumesPendingDeletion(t *testing.T) {
 		deleted++
 		return &agentsv1.DeleteSandboxResponse{}, nil
 	}}
-	native := &fakeRunnerClient{removeVolumeChecked: func(_ context.Context, req *runnerv1.RemoveVolumeCheckedRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+	native := &fakeRunnerClient{removeVolumeBound: func(_ context.Context, req *runnerv1.RemoveVolumeBoundRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error) {
 		removals++
 		if !proto.Equal(req.Expected, expected) || req.Expected.InstanceId == v.Meta.Id {
 			t.Fatal("sandbox cleanup guessed a name instead of using the stored physical identity")
@@ -57,7 +57,7 @@ func TestCheckedSandboxTerminationResumesPendingDeletion(t *testing.T) {
 		if removals == 2 {
 			state = runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_ABSENT
 		}
-		return &runnerv1.RemoveVolumeCheckedResponse{State: state}, nil
+		return &runnerv1.RemoveVolumeBoundResponse{BackendId: checkedTestBackend, State: state}, nil
 	}}
 	dialer := &fakeRunnerDialer{dial: func(_ context.Context, id string) (runnerv1.RunnerServiceClient, error) {
 		if id != v.RunnerId {

@@ -217,7 +217,7 @@ func TestCheckedVolumeBeginValidatesReplyBeforeNativeDelete(t *testing.T) {
 				change(resp)
 				return resp, nil
 			}}}
-			native := &fakeRunnerClient{removeVolumeChecked: func(context.Context, *runnerv1.RemoveVolumeCheckedRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+			native := &fakeRunnerClient{removeVolumeBound: func(context.Context, *runnerv1.RemoveVolumeBoundRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error) {
 				t.Fatal("malformed begin reply reached the native delete")
 				return nil, errNotImplemented
 			}}
@@ -245,7 +245,7 @@ func TestCheckedVolumeRemovalResumesOriginalIntent(t *testing.T) {
 				}
 				return resp, nil
 			}}
-			native := &fakeRunnerClient{removeVolumeChecked: func(_ context.Context, req *runnerv1.RemoveVolumeCheckedRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+			native := &fakeRunnerClient{removeVolumeBound: func(_ context.Context, req *runnerv1.RemoveVolumeBoundRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error) {
 				nativeCalls++
 				if !proto.Equal(req.Expected, original) {
 					t.Fatal("restart retargeted the durable intent")
@@ -256,9 +256,9 @@ func TestCheckedVolumeRemovalResumesOriginalIntent(t *testing.T) {
 				}
 				if !lost && lostAt == "pending" {
 					lost = true
-					return &runnerv1.RemoveVolumeCheckedResponse{State: runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_PENDING}, nil
+					return &runnerv1.RemoveVolumeBoundResponse{BackendId: checkedTestBackend, State: runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_PENDING}, nil
 				}
-				return &runnerv1.RemoveVolumeCheckedResponse{State: runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_ABSENT}, nil
+				return &runnerv1.RemoveVolumeBoundResponse{BackendId: checkedTestBackend, State: runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_ABSENT}, nil
 			}}
 			first := &Reconciler{runners: registry}
 			done, err := first.advanceVolumeRemoval(context.Background(), native, proto.Clone(v).(*runnersv1.Volume))
@@ -304,14 +304,14 @@ func TestCheckedVolumeNativeFailureNeverConfirmsOrFallsBack(t *testing.T) {
 					t.Fatal("unsafe legacy removal fallback")
 					return nil, errNotImplemented
 				},
-				removeVolumeChecked: func(context.Context, *runnerv1.RemoveVolumeCheckedRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+				removeVolumeBound: func(context.Context, *runnerv1.RemoveVolumeBoundRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error) {
 					switch scenario {
 					case "nil":
 						return nil, nil
 					case "unknown":
-						return &runnerv1.RemoveVolumeCheckedResponse{State: runnerv1.VolumeRemovalState(99)}, nil
+						return &runnerv1.RemoveVolumeBoundResponse{BackendId: checkedTestBackend, State: runnerv1.VolumeRemovalState(99)}, nil
 					case "pending":
-						return &runnerv1.RemoveVolumeCheckedResponse{State: runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_PENDING}, nil
+						return &runnerv1.RemoveVolumeBoundResponse{BackendId: checkedTestBackend, State: runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_PENDING}, nil
 					case "unimplemented":
 						return nil, status.Error(codes.Unimplemented, "old runner")
 					case "replacement-conflict":
@@ -433,7 +433,7 @@ func TestCheckedVolumeRegistryErrorsDoNotFallBackOrRetry(t *testing.T) {
 			if next, owned, err := r.createOrReuseCheckedVolume(context.Background(), checkedTestCreateRequest(v)); status.Code(err) != code || owned || next != nil || calls != 1 {
 				t.Fatal("registry create failure triggered a retry or fallback")
 			}
-			native := &fakeRunnerClient{removeVolumeChecked: func(context.Context, *runnerv1.RemoveVolumeCheckedRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+			native := &fakeRunnerClient{removeVolumeBound: func(context.Context, *runnerv1.RemoveVolumeBoundRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error) {
 				t.Fatal("failed registry begin authorized native removal")
 				return nil, errNotImplemented
 			}}
@@ -471,8 +471,8 @@ func TestCheckedVolumeConfirmationRequiresMatchingAcknowledgement(t *testing.T) 
 				}
 				return resp, nil
 			}}}
-			native := &fakeRunnerClient{removeVolumeChecked: func(context.Context, *runnerv1.RemoveVolumeCheckedRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
-				return &runnerv1.RemoveVolumeCheckedResponse{State: runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_ABSENT}, nil
+			native := &fakeRunnerClient{removeVolumeBound: func(context.Context, *runnerv1.RemoveVolumeBoundRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error) {
+				return &runnerv1.RemoveVolumeBoundResponse{BackendId: checkedTestBackend, State: runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_ABSENT}, nil
 			}}
 			if done, err := r.advanceVolumeRemoval(context.Background(), native, v); done || err == nil {
 				t.Fatal("invalid registry confirmation settled deletion")

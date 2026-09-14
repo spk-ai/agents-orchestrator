@@ -19,7 +19,7 @@ func checkedTestInstance(v *runnersv1.Volume, name, uid string) *runnerv1.Volume
 	} else {
 		labels["agent-instance-id"], labels["agent-id"] = v.OwnerId, v.AgentId
 	}
-	return &runnerv1.VolumeListItem{VolumeKey: v.Meta.Id, InstanceId: name, InstanceUid: uid, IdentityLabels: labels}
+	return &runnerv1.VolumeListItem{VolumeKey: v.Meta.Id, InstanceId: name, InstanceUid: uid, IdentityLabels: labels, BackendId: checkedTestBackend}
 }
 
 func checkedTestVolume(key string, state runnersv1.VolumeStatus) *runnersv1.Volume {
@@ -97,7 +97,7 @@ func checkedTestUpdate(t *testing.T, v *runnersv1.Volume, req *runnersv1.UpdateV
 		}
 		next.Status = runnersv1.VolumeStatus_VOLUME_STATUS_DEPROVISIONING
 	case *runnersv1.UpdateVolumeCheckedRequest_ConfirmRemoval:
-		if op.ConfirmRemoval.GetIntentId() != next.GetRemovalIntent().GetId() {
+		if op.ConfirmRemoval.GetIntentId() != next.GetRemovalIntent().GetId() || op.ConfirmRemoval.GetBackendId() != next.GetRemovalIntent().GetExpected().GetBackendId() {
 			t.Fatal("fixture received the wrong confirmation intent")
 		}
 		next.Status = runnersv1.VolumeStatus_VOLUME_STATUS_DELETED

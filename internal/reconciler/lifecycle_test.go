@@ -2152,7 +2152,7 @@ func (f *fakeRunnersClient) StreamWorkloadLogs(ctx context.Context, req *runnerv
 }
 
 type fakeRunnerClient struct {
-	removeVolumeChecked   func(context.Context, *runnerv1.RemoveVolumeCheckedRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error)
+	removeVolumeBound     func(context.Context, *runnerv1.RemoveVolumeBoundRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error)
 	startWorkload         func(context.Context, *runnerv1.StartWorkloadRequest, ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error)
 	stopWorkload          func(context.Context, *runnerv1.StopWorkloadRequest, ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error)
 	listWorkloads         func(context.Context, *runnerv1.ListWorkloadsRequest, ...grpc.CallOption) (*runnerv1.ListWorkloadsResponse, error)
@@ -2162,9 +2162,13 @@ type fakeRunnerClient struct {
 	findWorkloadsByLabels func(context.Context, *runnerv1.FindWorkloadsByLabelsRequest, ...grpc.CallOption) (*runnerv1.FindWorkloadsByLabelsResponse, error)
 }
 
-func (f *fakeRunnerClient) RemoveVolumeChecked(ctx context.Context, req *runnerv1.RemoveVolumeCheckedRequest, opts ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
-	if f.removeVolumeChecked != nil {
-		return f.removeVolumeChecked(ctx, req, opts...)
+func (f *fakeRunnerClient) RemoveVolumeChecked(context.Context, *runnerv1.RemoveVolumeCheckedRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+	return nil, errNotImplemented
+}
+
+func (f *fakeRunnerClient) RemoveVolumeBound(ctx context.Context, req *runnerv1.RemoveVolumeBoundRequest, opts ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error) {
+	if f.removeVolumeBound != nil {
+		return f.removeVolumeBound(ctx, req, opts...)
 	}
 	return nil, errNotImplemented
 }

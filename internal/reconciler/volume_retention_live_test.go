@@ -86,9 +86,9 @@ func TestLiveVolumeRetention(t *testing.T) {
 		}
 		return native.ListVolumes(ctx, req, opts...)
 	}
-	f.runner.removeVolumeChecked = func(ctx context.Context, req *runnerv1.RemoveVolumeCheckedRequest, opts ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+	f.runner.removeVolumeBound = func(ctx context.Context, req *runnerv1.RemoveVolumeBoundRequest, opts ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error) {
 		f.removed = append(f.removed, req.GetExpected().GetInstanceId())
-		return native.RemoveVolumeChecked(ctx, req, opts...)
+		return native.RemoveVolumeBound(ctx, req, opts...)
 	}
 	reconcile := func() {
 		t.Helper()
@@ -408,6 +408,7 @@ func newRetentionLiveNamespace(t *testing.T, ctx context.Context, kubeconfig str
 		t.Fatal(err)
 	}
 	f.owned[retentionResource("", "serviceaccounts")][account.Name] = account.UID
+	grantRetentionNamespaceRead(t, ctx, f)
 	f.owned[retentionResource(rbacv1.GroupName, "roles")]["volume-inspector"] = ""
 	role, err := kube.RbacV1().Roles(f.namespace).Create(ctx, &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "volume-inspector", Labels: labels}, Rules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"persistentvolumeclaims"}, Verbs: []string{"get", "list", "delete"}}}}, metav1.CreateOptions{})
 	if err != nil {

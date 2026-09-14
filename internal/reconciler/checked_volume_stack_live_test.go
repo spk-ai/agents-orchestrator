@@ -88,6 +88,30 @@ func TestLiveCheckedVolumeStack(t *testing.T) {
 				t.Fatal("registry binding does not name the native PVC")
 			}
 			target := proto.Clone(v.BoundInstance).(*runnerv1.VolumeListItem)
+			backendID := "kubernetes-namespace/v1/" + live.namespace + "/" + string(live.uid)
+			if target.BackendId != backendID {
+				t.Fatal("registry binding did not persist the observed native namespace identity")
+			}
+			otherBackend := newRetentionLiveNamespace(t, ctx, kubeconfig)
+			wrongNative := startRetentionNativeRunner(t, ctx, runnerBinary, kubeconfig, otherBackend)
+			if resp, err := wrongNative.RemoveVolumeBound(ctx, &runnerv1.RemoveVolumeBoundRequest{Expected: target}); resp != nil || status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("wrong native route falsely confirmed absence: %v, %v", resp, err)
+			}
+			wrongRoute := cfg
+			wrongRoute.Mode, wrongRoute.RunnerAddress = "volumes", otherBackend.runnerAddress
+			wrongResult := startCheckedController(t, wrongRoute).finish(t, ctx)
+			for _, operation := range wrongResult.Operations {
+				if operation.Operation != runnersv1.RunnersService_ListVolumes_FullMethodName && operation.Operation != runnersv1.RunnersService_ListRunners_FullMethodName {
+					t.Fatalf("wrong backend route attempted an unexpected operation: %s", operation.Operation)
+				}
+			}
+			if wrongResult.DeletedSandbox != 0 || !proto.Equal(v, database.assertVolume(t, ctx, registry.client, cfg.VolumeID)) {
+				t.Fatal("wrong backend inventory changed a durable binding or lifecycle")
+			}
+			if current, err := live.kube.CoreV1().PersistentVolumeClaims(live.namespace).Get(ctx, claim.Name, metav1.GetOptions{}); err != nil || current.UID != claim.UID || current.DeletionTimestamp != nil {
+				t.Fatal("wrong backend probe changed the original claim")
+			}
+			t.Logf("wrong native/controller route retained backend=%s claim=%s uid=%s", backendID, claim.Name, claim.UID)
 			boundRevision := v.LifecycleRevision
 			workload := func(volume *runnersv1.Volume) *runnersv1.CreateWorkloadRequest {
 				return &runnersv1.CreateWorkloadRequest{
@@ -243,7 +267,7 @@ func TestLiveCheckedVolumeStack(t *testing.T) {
 			if replacement.UID == claim.UID {
 				t.Fatal("fixture did not create a replacement UID")
 			}
-			if _, err := native.RemoveVolumeChecked(ctx, &runnerv1.RemoveVolumeCheckedRequest{Expected: target}); status.Code(err) != codes.FailedPrecondition {
+			if _, err := native.RemoveVolumeBound(ctx, &runnerv1.RemoveVolumeBoundRequest{Expected: target}); status.Code(err) != codes.FailedPrecondition {
 				t.Fatal("old target deleted a new physical generation")
 			}
 			if result := run("volumes"); result.ReconcileError || result.count("bind", "OK") != 1 {
