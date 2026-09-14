@@ -5,6 +5,34 @@ exist for threads with unacknowledged agent messages.
 
 Architecture: https://github.com/agynio/architecture/blob/main/architecture/agents-orchestrator.md
 
+## Backend-Bound Volume Lifecycle
+
+This dependent proposal pins the storage backend in native inventory, registry
+bindings, removal intents and confirmations. Inventory from another backend is
+retained without declaring the original workspace lost. Mixed/unknown inventory
+identity or a mismatched pending/absent response cannot authorize a transition.
+The controller uses `RemoveVolumeBound`; older runners return `Unimplemented`.
+It never falls back to `RemoveVolumeChecked` or name-only deletion.
+
+The matching API, registry migration `0021` and native runner must be coordinated.
+The migration refuses previously unidentified checked bindings; do not infer an
+identity or rebind a record to whichever backend happens to answer. Stored
+runner/owner identity and the physical namespace identity have different roles;
+these checks are not authentication of the route or caller.
+
+Tests include actual old-runner gRPC capability rejection and both owner kinds.
+The native fixture verifies wrong-runner routing against real Kubernetes,
+PostgreSQL and controller subprocesses, retaining original PVC/binding identity
+before exercising the existing process-crash cases. Namespace identity uses
+explicit GET-only RBAC; fixture namespace listing, foreign-namespace access and
+Secret access remain denied. No installed task data or service is upgraded.
+
+Workload-start backend pinning, authenticated route/policy audit, cloned-cluster
+identity handling, late operations, partitioned-node fencing and coordinated
+A2A rollout remain open. The existing unrelated group-consumer race and
+`start_decision.go` self-assignment vet failure remain separate limitations;
+selected race and `go vet -assign=false` results are not unfiltered passes.
+
 ## Confirmed Workload Removal
 
 `StopWorkload` may acknowledge a deletion request before the runtime has gone.

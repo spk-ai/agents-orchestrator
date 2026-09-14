@@ -89,7 +89,8 @@ func validateCheckedVolume(v *runnersv1.Volume) error {
 }
 
 func validateVolumeInstance(v *runnersv1.Volume, item *runnerv1.VolumeListItem) error {
-	if item == nil || !validVolumeValue(item.InstanceId) || !validVolumeValue(item.InstanceUid) || item.VolumeKey != v.GetMeta().GetId() {
+	if item == nil || !validVolumeValue(item.InstanceId) || !validVolumeValue(item.InstanceUid) || item.VolumeKey != v.GetMeta().GetId() ||
+		!validVolumeValue(item.BackendId) || len(item.BackendId) > 512 {
 		return checkedVolumeError(v, "complete physical identity required")
 	}
 	labels := item.IdentityLabels
@@ -282,18 +283,21 @@ func (r *Reconciler) advanceVolumeRemoval(ctx context.Context, runner runnerv1.R
 	if err != nil {
 		return false, err
 	}
-	resp, err := runner.RemoveVolumeChecked(ctx, &runnerv1.RemoveVolumeCheckedRequest{
+	resp, err := runner.RemoveVolumeBound(ctx, &runnerv1.RemoveVolumeBoundRequest{
 		Expected: proto.Clone(next.RemovalIntent.Expected).(*runnerv1.VolumeListItem),
 	})
 	if err != nil {
 		return false, err
+	}
+	if resp.GetBackendId() != next.RemovalIntent.Expected.BackendId {
+		return false, checkedVolumeError(next, "runner did not confirm the stored backend identity")
 	}
 	switch resp.GetState() {
 	case runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_PENDING:
 		return false, nil
 	case runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_ABSENT:
 		_, err := r.updateCheckedVolume(ctx, next, &runnersv1.UpdateVolumeCheckedRequest{
-			Operation: &runnersv1.UpdateVolumeCheckedRequest_ConfirmRemoval{ConfirmRemoval: &runnersv1.ConfirmVolumeRemoval{IntentId: next.RemovalIntent.Id}},
+			Operation: &runnersv1.UpdateVolumeCheckedRequest_ConfirmRemoval{ConfirmRemoval: &runnersv1.ConfirmVolumeRemoval{IntentId: next.RemovalIntent.Id, BackendId: resp.BackendId}},
 		})
 		return err == nil, err
 	default:

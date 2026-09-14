@@ -175,6 +175,10 @@ func (r *Reconciler) reconcileVolumes(ctx context.Context) error {
 		}
 
 		for volumeID, volume := range trackedVolumes {
+			if volume.BoundInstance != nil && volume.BoundInstance.BackendId != resp.BackendId {
+				log.Printf("reconciler: warn: runner %s storage backend changed for volume %s; retaining its record and disk", runnerID, volumeID)
+				continue
+			}
 			item, ok := runnerVolumes[volumeID]
 			if !ok {
 				// Inventory absence is not confirmation. Only an existing durable
@@ -219,11 +223,17 @@ func indexRunnerVolumes(resp *runnerv1.ListVolumesResponse) (map[string]*runnerv
 	if resp == nil {
 		return nil, fmt.Errorf("response is nil")
 	}
+	if !validVolumeValue(resp.BackendId) || len(resp.BackendId) > 512 {
+		return nil, fmt.Errorf("inventory backend identity is missing or invalid")
+	}
 	byKey := make(map[string]*runnerv1.VolumeListItem, len(resp.GetVolumes()))
 	byInstance := make(map[string]struct{}, len(resp.GetVolumes()))
 	for i, item := range resp.GetVolumes() {
 		if item == nil {
 			return nil, fmt.Errorf("volume %d is nil", i)
+		}
+		if item.BackendId != resp.BackendId {
+			return nil, fmt.Errorf("volume %d differs from the inventory backend", i)
 		}
 		key, instanceID := item.GetVolumeKey(), item.GetInstanceId()
 		if key == "" || strings.TrimSpace(key) != key {

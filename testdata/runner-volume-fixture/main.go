@@ -1,5 +1,5 @@
 // This model-free fixture must be built inside a reviewed k8s-runner checkout.
-// It exposes that checkout's real ListVolumes and RemoveVolumeChecked over loopback.
+// It exposes that checkout's real ListVolumes and RemoveVolumeBound over loopback.
 package main
 
 import (
@@ -69,6 +69,16 @@ func run() error {
 	if _, err := kube.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{}); !apierrors.IsForbidden(err) {
 		return fmt.Errorf("secret access must be denied")
 	}
+	if _, err := kube.CoreV1().Namespaces().List(ctx, metav1.ListOptions{}); !apierrors.IsForbidden(err) {
+		return fmt.Errorf("namespace listing must be denied")
+	}
+	if _, err := kube.CoreV1().Namespaces().Get(ctx, "default", metav1.GetOptions{}); !apierrors.IsForbidden(err) {
+		return fmt.Errorf("other namespace identity access must be denied")
+	}
+	observed, err := kube.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err != nil || string(observed.UID) != uid {
+		return fmt.Errorf("scoped namespace identity read required")
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -77,8 +87,8 @@ func run() error {
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		switch info.FullMethod {
 		case runnerv1.RunnerService_ListVolumes_FullMethodName:
-		case runnerv1.RunnerService_RemoveVolumeChecked_FullMethodName:
-			name := req.(*runnerv1.RemoveVolumeCheckedRequest).GetExpected().GetInstanceId()
+		case runnerv1.RunnerService_RemoveVolumeBound_FullMethodName:
+			name := req.(*runnerv1.RemoveVolumeBoundRequest).GetExpected().GetInstanceId()
 			claim, err := kube.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metav1.GetOptions{})
 			if apierrors.IsNotFound(err) {
 				break

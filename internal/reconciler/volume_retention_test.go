@@ -28,7 +28,7 @@ func TestReconcileVolumesRetainsUntrackedInventory(t *testing.T) {
 			anchor := f.volume("anchor", runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING)
 			candidate := f.volume("candidate", runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING)
 			f.records = []*runnersv1.Volume{anchor}
-			f.inventory = &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{
+			f.inventory = &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{
 				f.item("anchor"), f.item("candidate"),
 			}}
 			switch name {
@@ -84,17 +84,17 @@ func TestReconcileVolumesRejectsInvalidInventory(t *testing.T) {
 		inventory *runnerv1.ListVolumesResponse
 	}{
 		{"nil_response", nil},
-		{"nil_item", &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{nil}}},
-		{"missing_key", &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{{InstanceId: "pvc-tracked"}}}},
-		{"blank_key", &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{{VolumeKey: " \t", InstanceId: "pvc-tracked"}}}},
-		{"padded_key", &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{{VolumeKey: "tracked ", InstanceId: "pvc-tracked"}}}},
-		{"missing_instance", &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{{VolumeKey: "tracked"}}}},
-		{"blank_instance", &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{{VolumeKey: "tracked", InstanceId: " \t"}}}},
-		{"padded_instance", &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{{VolumeKey: "tracked", InstanceId: "pvc-tracked "}}}},
-		{"duplicate_key", &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{valid, {VolumeKey: "tracked", InstanceId: "pvc-other"}}}},
-		{"duplicate_instance", &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{valid, {VolumeKey: "other", InstanceId: "pvc-tracked"}}}},
-		{"repeated_item", &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{valid, valid}}},
-		{"invalid_after_valid", &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{valid, nil}}},
+		{"nil_item", &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{nil}}},
+		{"missing_key", &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{{BackendId: checkedTestBackend, InstanceId: "pvc-tracked"}}}},
+		{"blank_key", &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{{BackendId: checkedTestBackend, VolumeKey: " \t", InstanceId: "pvc-tracked"}}}},
+		{"padded_key", &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{{BackendId: checkedTestBackend, VolumeKey: "tracked ", InstanceId: "pvc-tracked"}}}},
+		{"missing_instance", &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{{BackendId: checkedTestBackend, VolumeKey: "tracked"}}}},
+		{"blank_instance", &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{{BackendId: checkedTestBackend, VolumeKey: "tracked", InstanceId: " \t"}}}},
+		{"padded_instance", &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{{BackendId: checkedTestBackend, VolumeKey: "tracked", InstanceId: "pvc-tracked "}}}},
+		{"duplicate_key", &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{valid, {BackendId: checkedTestBackend, VolumeKey: "tracked", InstanceId: "pvc-other"}}}},
+		{"duplicate_instance", &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{valid, {BackendId: checkedTestBackend, VolumeKey: "other", InstanceId: "pvc-tracked"}}}},
+		{"repeated_item", &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{valid, valid}}},
+		{"invalid_after_valid", &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{valid, nil}}},
 	} {
 		for _, state := range []runnersv1.VolumeStatus{
 			runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING,
@@ -121,7 +121,7 @@ func TestReconcileVolumesRejectsInvalidInventory(t *testing.T) {
 func TestReconcileVolumesRemovesOnlyTrackedDeprovisioningDisk(t *testing.T) {
 	f := newVolumeRetentionFixture(t)
 	f.records = []*runnersv1.Volume{f.volume("tracked", runnersv1.VolumeStatus_VOLUME_STATUS_DEPROVISIONING)}
-	f.inventory = &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{
+	f.inventory = &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{
 		f.item("tracked"), f.item("untracked"),
 	}}
 	f.reconcile(t)
@@ -139,7 +139,7 @@ func TestReconcileVolumesRetainsForeignVolumeOnLaterRegistryPage(t *testing.T) {
 	foreign := f.volume("foreign", runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE)
 	foreign.OrganizationId = uuid.NewString()
 	f.records = []*runnersv1.Volume{anchor, foreign}
-	f.inventory = &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{
+	f.inventory = &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{
 		f.item("anchor"), f.item("foreign"),
 	}}
 	f.reconciler.runners.(*fakeRunnersClient).listVolumes = func(_ context.Context, req *runnersv1.ListVolumesRequest, _ ...grpc.CallOption) (*runnersv1.ListVolumesResponse, error) {
@@ -165,7 +165,7 @@ func TestReconcileVolumesInvalidInventoryDoesNotBlockOtherRunner(t *testing.T) {
 	healthy := f.volume("healthy", runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING)
 	healthy.RunnerId = "runner-2"
 	f.records = []*runnersv1.Volume{f.volume("invalid", runnersv1.VolumeStatus_VOLUME_STATUS_DEPROVISIONING), healthy}
-	f.inventory = &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{nil}}
+	f.inventory = &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{nil}}
 	f.reconciler.runners.(*fakeRunnersClient).listRunners = func(context.Context, *runnersv1.ListRunnersRequest, ...grpc.CallOption) (*runnersv1.ListRunnersResponse, error) {
 		return &runnersv1.ListRunnersResponse{Runners: []*runnersv1.Runner{buildRunner("runner-1"), buildRunner("runner-2")}}, nil
 	}
@@ -174,7 +174,7 @@ func TestReconcileVolumesInvalidInventoryDoesNotBlockOtherRunner(t *testing.T) {
 			return f.runner, nil
 		}
 		return &fakeRunnerClient{listVolumes: func(context.Context, *runnerv1.ListVolumesRequest, ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error) {
-			return &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{f.item("healthy")}}, nil
+			return &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{f.item("healthy")}}, nil
 		}}, nil
 	}}
 	f.reconcile(t)
@@ -207,9 +207,9 @@ func newVolumeRetentionFixture(t *testing.T) *volumeRetentionFixture {
 			}
 			return f.inventory, nil
 		},
-		removeVolumeChecked: func(_ context.Context, req *runnerv1.RemoveVolumeCheckedRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+		removeVolumeBound: func(_ context.Context, req *runnerv1.RemoveVolumeBoundRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error) {
 			f.removed = append(f.removed, req.GetExpected().GetInstanceId())
-			return &runnerv1.RemoveVolumeCheckedResponse{State: runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_PENDING}, nil
+			return &runnerv1.RemoveVolumeBoundResponse{BackendId: checkedTestBackend, State: runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_PENDING}, nil
 		},
 	}
 	runners := &fakeRunnersClient{

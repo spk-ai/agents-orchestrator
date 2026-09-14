@@ -1039,7 +1039,7 @@ func TestReconcileVolumesActivatesProvisioning(t *testing.T) {
 
 	runner := &fakeRunnerClient{
 		listVolumes: func(_ context.Context, _ *runnerv1.ListVolumesRequest, _ ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error) {
-			return &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{
+			return &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{
 				checkedTestInstance(volume, instanceID, "original-uid"),
 			}}, nil
 		},
@@ -1165,7 +1165,7 @@ func TestReconcileVolumesRetainsRecordOnMissingPVC(t *testing.T) {
 
 	runner := &fakeRunnerClient{
 		listVolumes: func(_ context.Context, _ *runnerv1.ListVolumesRequest, _ ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error) {
-			return &runnerv1.ListVolumesResponse{}, nil
+			return &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend}, nil
 		},
 	}
 	runnerDialer := &fakeRunnerDialer{
@@ -1329,16 +1329,16 @@ func TestReconcileVolumesTTLExpires(t *testing.T) {
 	removeCalled := false
 	runner := &fakeRunnerClient{
 		listVolumes: func(_ context.Context, _ *runnerv1.ListVolumesRequest, _ ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error) {
-			return &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{
+			return &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{
 				volume.BoundInstance,
 			}}, nil
 		},
-		removeVolumeChecked: func(_ context.Context, req *runnerv1.RemoveVolumeCheckedRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+		removeVolumeBound: func(_ context.Context, req *runnerv1.RemoveVolumeBoundRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error) {
 			if req.GetExpected().GetInstanceId() != instanceID || req.GetExpected().GetInstanceUid() != "ttl-uid" {
 				return nil, errors.New("unexpected volume id")
 			}
 			removeCalled = true
-			return &runnerv1.RemoveVolumeCheckedResponse{State: runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_PENDING}, nil
+			return &runnerv1.RemoveVolumeBoundResponse{BackendId: checkedTestBackend, State: runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_PENDING}, nil
 		},
 	}
 	runnerDialer := &fakeRunnerDialer{
@@ -1432,11 +1432,11 @@ func TestReconcileVolumesKeepsReusedPersistentVolume(t *testing.T) {
 	}
 	runner := &fakeRunnerClient{
 		listVolumes: func(_ context.Context, _ *runnerv1.ListVolumesRequest, _ ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error) {
-			return &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{
+			return &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{
 				checkedTestInstance(volume, instanceID, "retained-uid"),
 			}}, nil
 		},
-		removeVolumeChecked: func(context.Context, *runnerv1.RemoveVolumeCheckedRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+		removeVolumeBound: func(context.Context, *runnerv1.RemoveVolumeBoundRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error) {
 			return nil, errors.New("reused persistent volume must not be removed")
 		},
 	}
@@ -1559,12 +1559,12 @@ func TestReconcileVolumesSkipsSandboxOwnedVolumes(t *testing.T) {
 	}
 	runner := &fakeRunnerClient{
 		listVolumes: func(_ context.Context, _ *runnerv1.ListVolumesRequest, _ ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error) {
-			return &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{
+			return &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{
 				checkedTestInstance(agentVolume, instanceID, "agent-volume-uid"),
 				sandboxVolume.BoundInstance,
 			}}, nil
 		},
-		removeVolumeChecked: func(_ context.Context, req *runnerv1.RemoveVolumeCheckedRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+		removeVolumeBound: func(_ context.Context, req *runnerv1.RemoveVolumeBoundRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error) {
 			t.Fatalf("unexpected volume removal: %v", req)
 			return nil, errNotImplemented
 		},
@@ -2409,11 +2409,11 @@ func TestReconcileVolumesActivatesSandboxWorkspaceVolume(t *testing.T) {
 	}
 	runner := &fakeRunnerClient{
 		listVolumes: func(_ context.Context, _ *runnerv1.ListVolumesRequest, _ ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error) {
-			return &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{
+			return &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{
 				checkedTestInstance(volume, instanceID, "sandbox-workspace-uid"),
 			}}, nil
 		},
-		removeVolumeChecked: func(_ context.Context, _ *runnerv1.RemoveVolumeCheckedRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+		removeVolumeBound: func(_ context.Context, _ *runnerv1.RemoveVolumeBoundRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error) {
 			t.Fatal("sandbox workspace volume must not be removed")
 			return nil, errors.New("sandbox workspace volume must not be removed")
 		},
@@ -2474,11 +2474,11 @@ func TestReconcileVolumesKeepsActiveSandboxWorkspaceVolume(t *testing.T) {
 	}
 	runner := &fakeRunnerClient{
 		listVolumes: func(_ context.Context, _ *runnerv1.ListVolumesRequest, _ ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error) {
-			return &runnerv1.ListVolumesResponse{Volumes: []*runnerv1.VolumeListItem{
+			return &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend, Volumes: []*runnerv1.VolumeListItem{
 				volume.BoundInstance,
 			}}, nil
 		},
-		removeVolumeChecked: func(_ context.Context, _ *runnerv1.RemoveVolumeCheckedRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+		removeVolumeBound: func(_ context.Context, _ *runnerv1.RemoveVolumeBoundRequest, _ ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error) {
 			t.Fatal("sandbox workspace volume must survive idle stops")
 			return nil, errors.New("sandbox workspace volume must survive idle stops")
 		},
@@ -2517,7 +2517,7 @@ func TestReconcileVolumesFailsSandboxWhenWorkspaceVolumeLost(t *testing.T) {
 	}
 	runner := &fakeRunnerClient{
 		listVolumes: func(_ context.Context, _ *runnerv1.ListVolumesRequest, _ ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error) {
-			return &runnerv1.ListVolumesResponse{}, nil
+			return &runnerv1.ListVolumesResponse{BackendId: checkedTestBackend}, nil
 		},
 	}
 	degradeCalled := false

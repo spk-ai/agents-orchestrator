@@ -161,9 +161,9 @@ func TestCheckedVolumeControllerProcess(t *testing.T) {
 	native, err := grpc.NewClient(cfg.RunnerAddress, grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoke grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 			err := invoke(ctx, method, req, reply, cc, opts...)
-			if remove, ok := req.(*runnerv1.RemoveVolumeCheckedRequest); ok {
+			if remove, ok := req.(*runnerv1.RemoveVolumeBoundRequest); ok {
 				operation := checkedControllerOperation{Operation: "native-remove", ID: remove.Expected.VolumeKey, Code: status.Code(err).String()}
-				if response, ok := reply.(*runnerv1.RemoveVolumeCheckedResponse); ok {
+				if response, ok := reply.(*runnerv1.RemoveVolumeBoundResponse); ok {
 					operation.NativeState = response.State.String()
 				}
 				mu.Lock()
