@@ -11,6 +11,12 @@ combination is API `ec2bfed`, Runners `f05b479` (migrations 0017-0019), native
 runner `3c461c5`, and orchestrator checked-lifecycle code `eebf4cf` plus this
 fixture. These are coordinated contribution branches, not published releases.
 
+The separate [prepared execution fixture](../runner-prepared-fixture/README.md)
+reuses this registry helper with an explicit `preparedWorkloads` configuration
+flag. That mode requires migrations `0020`-`0022` and the actual prepared RPCs,
+and refuses legacy workload creation. The default volume-only mode retains its
+existing allowlist and no-execution scope.
+
 From the orchestrator checkout, with absolute paths set by the operator:
 
 ```bash

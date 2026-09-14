@@ -33,12 +33,13 @@ import (
 )
 
 type fixtureConfig struct {
-	DSN            string `json:"dsn"`
-	Schema         string `json:"schema"`
-	RunID          string `json:"runId"`
-	Token          string `json:"token"`
-	RunnerID       string `json:"runnerId"`
-	OrganizationID string `json:"organizationId"`
+	DSN               string `json:"dsn"`
+	Schema            string `json:"schema"`
+	RunID             string `json:"runId"`
+	Token             string `json:"token"`
+	RunnerID          string `json:"runnerId"`
+	OrganizationID    string `json:"organizationId"`
+	PreparedWorkloads bool   `json:"preparedWorkloads,omitempty"`
 }
 
 type tupleWriter struct {
@@ -150,6 +151,17 @@ func run() error {
 	if err := initialize(setup, pool, cfg, schema); err != nil {
 		return err
 	}
+	// Keep the volume-only fixture buildable against its older reviewed APIs.
+	// Prepared mode still requires both actual generated server handlers.
+	preparedRPCs := map[string]bool{}
+	for _, method := range runnersv1.RunnersService_ServiceDesc.Methods {
+		if method.MethodName == "CreatePreparedWorkload" || method.MethodName == "UpdatePreparedWorkload" {
+			preparedRPCs["/"+runnersv1.RunnersService_ServiceDesc.ServiceName+"/"+method.MethodName] = true
+		}
+	}
+	if cfg.PreparedWorkloads && len(preparedRPCs) != 2 {
+		return fmt.Errorf("reviewed prepared workload RPCs required")
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return fmt.Errorf("loopback listener unavailable")
@@ -161,13 +173,23 @@ func run() error {
 		if len(values) != 1 || subtle.ConstantTimeCompare([]byte(values[0]), []byte(cfg.Token)) != 1 {
 			return nil, status.Error(codes.Unauthenticated, "fixture credential required")
 		}
+		if preparedRPCs[info.FullMethod] {
+			if cfg.PreparedWorkloads {
+				return handler(ctx, req)
+			}
+			return nil, status.Error(codes.PermissionDenied, "prepared fixture mode required")
+		}
 		switch info.FullMethod {
+		case runnersv1.RunnersService_CreateWorkload_FullMethodName:
+			if cfg.PreparedWorkloads {
+				return nil, status.Error(codes.PermissionDenied, "legacy start not allowed in prepared fixture")
+			}
+			return handler(ctx, req)
 		case runnersv1.RunnersService_CreateVolumeChecked_FullMethodName,
 			runnersv1.RunnersService_UpdateVolumeChecked_FullMethodName,
 			runnersv1.RunnersService_GetVolume_FullMethodName,
 			runnersv1.RunnersService_ListVolumes_FullMethodName,
 			runnersv1.RunnersService_ListRunners_FullMethodName,
-			runnersv1.RunnersService_CreateWorkload_FullMethodName,
 			runnersv1.RunnersService_UpdateWorkload_FullMethodName,
 			runnersv1.RunnersService_GetWorkload_FullMethodName,
 			runnersv1.RunnersService_ListWorkloads_FullMethodName,
@@ -232,6 +254,12 @@ func initialize(ctx context.Context, pool *pgxpool.Pool, cfg fixtureConfig, sche
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations WHERE version IN
 		('0017_workload_removal_confirmation.sql', '0018_checked_volume_lifecycle.sql', '0019_volume_workload_admission.sql')`).Scan(&count); err != nil || count != 3 {
 		return fmt.Errorf("reviewed workload, volume and admission migrations required")
+	}
+	if cfg.PreparedWorkloads {
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations WHERE version IN
+			('0020_legacy_volume_adoption.sql', '0021_volume_backend_identity.sql', '0022_prepared_workloads.sql')`).Scan(&count); err != nil || count != 3 {
+			return fmt.Errorf("reviewed prepared workload migrations required")
+		}
 	}
 	identity := uuid.NewSHA1(uuid.NameSpaceOID, []byte(cfg.RunID+"/registry-runner"))
 	hash := sha256.Sum256([]byte(cfg.Token))

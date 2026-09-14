@@ -30,12 +30,13 @@ import (
 const checkedStackLabel = "agyn.io/checked-volume-stack"
 
 type checkedRegistryConfig struct {
-	DSN            string `json:"dsn"`
-	Schema         string `json:"schema"`
-	RunID          string `json:"runId"`
-	Token          string `json:"token"`
-	RunnerID       string `json:"runnerId"`
-	OrganizationID string `json:"organizationId"`
+	DSN               string `json:"dsn"`
+	Schema            string `json:"schema"`
+	RunID             string `json:"runId"`
+	Token             string `json:"token"`
+	RunnerID          string `json:"runnerId"`
+	OrganizationID    string `json:"organizationId"`
+	PreparedWorkloads bool   `json:"preparedWorkloads,omitempty"`
 }
 
 type checkedStackProcess struct {
