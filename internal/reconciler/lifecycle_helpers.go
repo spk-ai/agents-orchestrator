@@ -68,7 +68,7 @@ func (r *Reconciler) markVolumeRecordsFailed(ctx context.Context, records []volu
 	}
 }
 
-func (r *Reconciler) createWorkloadRecord(ctx context.Context, workloadID, runnerID string, target AgentInstanceTarget, assembled *assembler.AssembleResult, zitiIdentityID *string) error {
+func agentWorkloadMetadata(workloadID, runnerID string, target AgentInstanceTarget, assembled *assembler.AssembleResult, zitiIdentityID *string) *runnersv1.CreateWorkloadRequest {
 	status := runnersv1.WorkloadStatus_WORKLOAD_STATUS_STARTING
 	zitiIdentityValue := ""
 	if zitiIdentityID != nil {
@@ -76,7 +76,7 @@ func (r *Reconciler) createWorkloadRecord(ctx context.Context, workloadID, runne
 	}
 	agentClassID := target.AgentID.String()
 	agentInstanceID := target.AgentInstanceID.String()
-	_, err := r.runners.CreateWorkload(ctx, &runnersv1.CreateWorkloadRequest{
+	return &runnersv1.CreateWorkloadRequest{
 		Id:                     workloadID,
 		RunnerId:               runnerID,
 		ThreadId:               agentInstanceID,
@@ -92,8 +92,7 @@ func (r *Reconciler) createWorkloadRecord(ctx context.Context, workloadID, runne
 		OwnerId:                agentInstanceID,
 		AgentClassId:           &agentClassID,
 		AgentInstanceId:        &agentInstanceID,
-	})
-	return err
+	}
 }
 
 func (r *Reconciler) createVolumeRecords(ctx context.Context, records []volumeRecord, runnerID string, target AgentInstanceTarget, organizationID string) ([]volumeRecord, error) {

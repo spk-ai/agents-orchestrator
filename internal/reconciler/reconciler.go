@@ -351,61 +351,9 @@ func (r *Reconciler) startWorkload(ctx context.Context, target AgentInstanceTarg
 		r.compensateIdentity(ctx, zitiIdentityID, "volume record failure")
 		return
 	}
-	if err := r.createWorkloadRecord(ctx, workloadIDValue, runnerID, target, assembled, zitiIdentityID); err != nil {
-		log.Printf("reconciler: create workload record %s for agent %s instance %s: %v", workloadIDValue, target.AgentID.String(), target.AgentInstanceID.String(), err)
-		r.markVolumeRecordsFailed(ctx, createdVolumes)
-		r.compensateIdentity(ctx, zitiIdentityID, "workload record failure")
-		return
-	}
-	resp, err := runnerClient.StartWorkload(ctx, request)
-	if err != nil {
-		log.Printf("reconciler: start workload for agent %s instance %s: %v", target.AgentID.String(), target.AgentInstanceID.String(), err)
-		r.markWorkloadFailed(ctx, workloadIDValue, nil, runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_START_FAILED, err.Error(), nil)
-		r.markVolumeRecordsFailed(ctx, createdVolumes)
-		r.compensateIdentity(ctx, zitiIdentityID, "start failure")
-		return
-	}
-	rawInstanceID := resp.GetId()
-	instanceID := normalizeRunnerWorkloadID(rawInstanceID)
-	containers := buildContainers(request, resp)
-	if resp.GetStatus() == runnerv1.WorkloadStatus_WORKLOAD_STATUS_FAILED {
-		failureMessage := failureSummary(resp.GetFailure())
-		log.Printf("reconciler: workload failed for agent %s instance %s: %s", target.AgentID.String(), target.AgentInstanceID.String(), failureMessage)
-		if instanceID != "" {
-			if err := r.stopRunnerWorkload(ctx, runnerClient, instanceID); err != nil {
-				log.Printf("reconciler: stop workload %s after failure: %v", instanceID, err)
-			}
-		}
-		r.markWorkloadFailed(ctx, workloadIDValue, stringPtr(instanceID), runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_START_FAILED, failureMessage, containers)
-		r.markVolumeRecordsFailed(ctx, createdVolumes)
-		r.compensateIdentity(ctx, zitiIdentityID, "workload failure")
-		return
-	}
-	if rawInstanceID == "" {
-		log.Printf("reconciler: workload started without id for agent %s instance %s", target.AgentID.String(), target.AgentInstanceID.String())
-		r.markWorkloadFailed(ctx, workloadIDValue, nil, runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_START_FAILED, "missing workload id", containers)
-		r.markVolumeRecordsFailed(ctx, createdVolumes)
-		r.compensateIdentity(ctx, zitiIdentityID, "missing workload id")
-		return
-	}
-	if resp.GetId() != workloadIDValue {
-		log.Printf("reconciler: workload id mismatch for agent %s instance %s (expected %s got %s)", target.AgentID.String(), target.AgentInstanceID.String(), workloadIDValue, resp.GetId())
-		instanceID := resp.GetId()
-		if err := r.stopRunnerWorkload(ctx, runnerClient, instanceID); err != nil {
-			log.Printf("reconciler: stop workload %s after id mismatch: %v", instanceID, err)
-		}
-		r.markWorkloadFailed(ctx, workloadIDValue, stringPtr(instanceID), runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_START_FAILED, "workload id mismatch", containers)
-		r.markVolumeRecordsFailed(ctx, createdVolumes)
-		r.compensateIdentity(ctx, zitiIdentityID, "workload id mismatch")
-		return
-	}
-	updateReq := &runnersv1.UpdateWorkloadRequest{
-		Id:         workloadIDValue,
-		InstanceId: stringPtr(instanceID),
-		Containers: containers,
-	}
-	if _, err := r.runners.UpdateWorkload(ctx, updateReq); err != nil {
-		log.Printf("reconciler: update workload record %s after start: %v", workloadIDValue, err)
+	metadata := agentWorkloadMetadata(workloadIDValue, runnerID, target, assembled, zitiIdentityID)
+	if _, err := r.startPreparedWorkload(ctx, runnerClient, metadata, request, assembled.PersistentVolumes, createdVolumes); err != nil {
+		log.Printf("reconciler: prepared start for agent %s instance %s: %v", target.AgentID.String(), target.AgentInstanceID.String(), err)
 	}
 }
 
@@ -437,6 +385,9 @@ func (r *Reconciler) stopWorkloadWithContext(ctx context.Context, workload *runn
 }
 
 func (r *Reconciler) stopWorkloadOnRunner(ctx context.Context, runnerClient runnerv1.RunnerServiceClient, workload *runnersv1.Workload) error {
+	if workload.GetPreparation() != nil {
+		return r.stopPreparedWorkload(ctx, runnerClient, workload)
+	}
 	workloadID := workload.GetMeta().GetId()
 	if workload.GetStatus() != runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED && workload.GetStatus() != runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING {
 		stopping := runnersv1.WorkloadStatus_WORKLOAD_STATUS_STOPPING

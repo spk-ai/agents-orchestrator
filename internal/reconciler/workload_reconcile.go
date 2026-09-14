@@ -137,6 +137,15 @@ func (r *Reconciler) reconcileWorkloads(ctx context.Context) error {
 			log.Printf("reconciler: warn: dial runner %s for workload reconciliation: %v", runnerID, err)
 			continue
 		}
+		// Prepared records have exact native identities. Their reconciliation
+		// must not depend on the availability/completeness of a name inventory.
+		for _, workload := range trackedWorkloads {
+			if workload.GetPreparation() != nil {
+				if err := r.handlePreparedRunnerWorkload(ctx, runnerClient, workload); err != nil {
+					log.Printf("reconciler: prepared workload %s: %v", workload.GetMeta().GetId(), err)
+				}
+			}
+		}
 		resp, err := runnerClient.ListWorkloads(ctx, &runnerv1.ListWorkloadsRequest{})
 		if err != nil {
 			log.Printf("reconciler: warn: list workloads for runner %s: %v", runnerID, err)
@@ -160,6 +169,10 @@ func (r *Reconciler) reconcileWorkloads(ctx context.Context) error {
 		}
 
 		for workloadID, workload := range trackedWorkloads {
+			if workload.GetPreparation() != nil {
+				delete(runnerWorkloads, workloadID)
+				continue
+			}
 			item, ok := runnerWorkloads[workloadID]
 			if !ok {
 				// Says what the runner actually reported. Marking a workload lost
@@ -216,6 +229,9 @@ var configInvalidReasons = map[string]struct{}{
 }
 
 func (r *Reconciler) handleMissingRunnerWorkload(ctx context.Context, runnerClient runnerv1.RunnerServiceClient, workload *runnersv1.Workload) error {
+	if workload.GetPreparation() != nil {
+		return r.handlePreparedRunnerWorkload(ctx, runnerClient, workload)
+	}
 	workloadID := workload.GetMeta().GetId()
 	if workloadID == "" {
 		return fmt.Errorf("workload missing id")
@@ -273,6 +289,9 @@ func (r *Reconciler) handleMissingRunnerWorkload(ctx context.Context, runnerClie
 }
 
 func (r *Reconciler) handlePresentRunnerWorkload(ctx context.Context, runnerClient runnerv1.RunnerServiceClient, workload *runnersv1.Workload, item *runnerv1.WorkloadListItem) error {
+	if workload.GetPreparation() != nil {
+		return r.handlePreparedRunnerWorkload(ctx, runnerClient, workload)
+	}
 	workloadID := workload.GetMeta().GetId()
 	if workloadID == "" {
 		return nil

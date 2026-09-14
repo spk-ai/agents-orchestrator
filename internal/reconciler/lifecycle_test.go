@@ -40,379 +40,100 @@ const (
 var errNotImplemented = errors.New("not implemented")
 
 func TestStartWorkloadCreatesIdentityAndStores(t *testing.T) {
-	ctx := context.Background()
-	agentID := uuid.New()
-	threadID := uuid.New()
-	zitiID := "ziti-identity"
-	jwt := "enrollment-jwt"
-	runnerID := "runner-1"
-	mainContainerID := "container-main"
-	testAssembler := newTestAssembler(agentID, true)
-
-	var calls []string
-	var workloadID string
-	zitiMgmt := &fakeZitiMgmtClient{
-		createAgentIdentity: func(_ context.Context, req *zitimgmtv1.CreateAgentIdentityRequest, _ ...grpc.CallOption) (*zitimgmtv1.CreateAgentIdentityResponse, error) {
-			calls = append(calls, "create")
-			assertStringSet(t, req.GetAdditionalRoleAttributes(), []string{groupRoleAttribute("group-a"), groupRoleAttribute("group-b")})
-			if req.GetAgentId() != threadID.String() {
-				return nil, errors.New("unexpected agent instance id")
-			}
-			// The class rides alongside the instance the identity resolves to.
-			if req.GetAgentClassId() != agentID.String() {
-				return nil, errors.New("unexpected agent class id")
-			}
-			workloadID = req.GetWorkloadId()
-			if workloadID == "" {
-				return nil, errors.New("missing workload id")
-			}
-			return &zitimgmtv1.CreateAgentIdentityResponse{ZitiIdentityId: zitiID, EnrollmentJwt: jwt}, nil
-		},
+	f, target := preparedAgentAssemblyFixture(t, true)
+	groups := &fakeGroupsClient{groupsByOrg: map[string][]*groupsv1.Group{testOrganizationID: {{Meta: &groupsv1.EntityMeta{Id: "group-b"}}, {Meta: &groupsv1.EntityMeta{Id: "group-a"}}, {Meta: &groupsv1.EntityMeta{Id: "group-a"}}}}}
+	f.r.groups = groups
+	var identityReq *zitimgmtv1.CreateAgentIdentityRequest
+	f.r.zitiMgmt = &fakeZitiMgmtClient{createAgentIdentity: func(_ context.Context, req *zitimgmtv1.CreateAgentIdentityRequest, _ ...grpc.CallOption) (*zitimgmtv1.CreateAgentIdentityResponse, error) {
+		identityReq = req
+		assertStringSet(t, req.GetAdditionalRoleAttributes(), []string{groupRoleAttribute("group-a"), groupRoleAttribute("group-b")})
+		if req.GetAgentId() != target.AgentInstanceID.String() || req.GetAgentClassId() != target.AgentID.String() {
+			t.Fatal("wrong identity ownership")
+		}
+		return &zitimgmtv1.CreateAgentIdentityResponse{ZitiIdentityId: "ziti-identity", EnrollmentJwt: "enrollment-jwt"}, nil
+	}}
+	f.r.startWorkload(context.Background(), target)
+	if f.activations != 1 || f.lastRequest == nil || identityReq == nil {
+		t.Fatal("prepared startup did not complete")
 	}
-
-	runner := &fakeRunnerClient{
-		startWorkload: func(_ context.Context, req *runnerv1.StartWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error) {
-			calls = append(calls, "start")
-			if req.GetMain() == nil {
-				return nil, errors.New("missing main container")
-			}
-			if req.GetWorkloadId() != workloadID {
-				return nil, errors.New("unexpected workload id")
-			}
-			labelKey := assembler.LabelKeyPrefix + assembler.LabelWorkloadKey
-			if req.GetAdditionalProperties()[labelKey] != workloadID {
-				return nil, errors.New("unexpected workload key label")
-			}
-			mainEnvs := envMap(req.GetMain().GetEnv())
-			if mainEnvs["WORKLOAD_ID"] != workloadID {
-				return nil, errors.New("missing WORKLOAD_ID")
-			}
-			zitiEnroll := testutil.FindInitContainer(req.GetInitContainers(), assembler.ZitiEnrollContainerName)
-			if zitiEnroll == nil {
-				return nil, errors.New("missing ziti enroll container")
-			}
-			envs := envMap(zitiEnroll.GetEnv())
-			if envs[assembler.ZitiEnrollmentTokenEnvVar] != jwt {
-				return nil, errors.New("missing ZITI_ENROLL_TOKEN")
-			}
-			if envs[assembler.ZitiIdentityBasenameEnvVar] != assembler.ZitiIdentityBasename {
-				return nil, errors.New("missing ZITI_IDENTITY_BASENAME")
-			}
-			if envs[assembler.ZitiEnrollmentControllerResolveHostEnvVar] != "ziti-controller-client.ziti.svc.cluster.local" {
-				return nil, errors.New("missing ZITI_ENROLLMENT_CONTROLLER_RESOLVE_HOST")
-			}
-			if envs[assembler.ZitiEnrollmentControllerPortEnvVar] != "2496" {
-				return nil, errors.New("missing ZITI_ENROLLMENT_CONTROLLER_PORT")
-			}
-			zitiSidecar := testutil.FindInitContainer(req.GetInitContainers(), assembler.ZitiSidecarContainerName)
-			if zitiSidecar == nil {
-				return nil, errors.New("missing ziti sidecar container")
-			}
-			if _, ok := envMap(zitiSidecar.GetEnv())[assembler.ZitiEnrollmentTokenEnvVar]; ok {
-				return nil, errors.New("unexpected sidecar ZITI_ENROLL_TOKEN")
-			}
-			return &runnerv1.StartWorkloadResponse{
-				Id:     workloadID,
-				Status: runnerv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
-				Containers: &runnerv1.WorkloadContainers{
-					Main: mainContainerID,
-				},
-			}, nil
-		},
+	m, request := f.lastMetadata, f.lastRequest.Workload
+	if m.Id != identityReq.WorkloadId || request.WorkloadId != m.Id || m.GetZitiIdentityId() != "ziti-identity" ||
+		m.RunnerId != f.v.RunnerId || m.AgentId != target.AgentID.String() || m.ThreadId != target.AgentInstanceID.String() ||
+		m.OrganizationId != testOrganizationID || m.OwnerId != target.AgentInstanceID.String() || m.OwnerKind != runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE ||
+		m.GetAgentClassId() != target.AgentID.String() || m.GetAgentInstanceId() != target.AgentInstanceID.String() ||
+		m.AllocatedCpuMillicores != testAllocatedCPUMillicores || m.AllocatedRamBytes != testAllocatedRAMBytes {
+		t.Fatal("prepared reservation lost identity or resource metadata")
 	}
-	runnerDialer := &fakeRunnerDialer{
-		dial: func(_ context.Context, id string) (runnerv1.RunnerServiceClient, error) {
-			calls = append(calls, "dial")
-			if id != runnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return runner, nil
-		},
+	if request.AdditionalProperties[assembler.LabelKeyPrefix+assembler.LabelWorkloadKey] != m.Id || envMap(request.Main.Env)["WORKLOAD_ID"] != m.Id {
+		t.Fatal("workload identity not passed to agent")
 	}
-
-	runners := &fakeRunnersClient{
-		createWorkload: func(_ context.Context, req *runnersv1.CreateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.CreateWorkloadResponse, error) {
-			calls = append(calls, "create-workload")
-			if req.GetId() == "" {
-				return nil, errors.New("missing workload id")
-			}
-			if workloadID == "" {
-				return nil, errors.New("missing workload id")
-			}
-			if req.GetId() != workloadID {
-				return nil, errors.New("unexpected workload id")
-			}
-			if req.GetRunnerId() != runnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			if req.GetAgentId() != agentID.String() || req.GetThreadId() != threadID.String() {
-				return nil, errors.New("unexpected identifiers")
-			}
-			if req.GetOrganizationId() != testOrganizationID {
-				return nil, errors.New("unexpected organization id")
-			}
-			if req.GetZitiIdentityId() != zitiID {
-				return nil, errors.New("unexpected ziti identity id")
-			}
-			if req.GetStatus() != runnersv1.WorkloadStatus_WORKLOAD_STATUS_STARTING {
-				return nil, errors.New("unexpected workload status")
-			}
-			if req.GetAllocatedCpuMillicores() != testAllocatedCPUMillicores {
-				return nil, errors.New("unexpected allocated cpu")
-			}
-			if req.GetAllocatedRamBytes() != testAllocatedRAMBytes {
-				return nil, errors.New("unexpected allocated ram")
-			}
-			return &runnersv1.CreateWorkloadResponse{}, nil
-		},
-		updateWorkload: func(_ context.Context, req *runnersv1.UpdateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
-			calls = append(calls, "update-workload")
-			if req.GetId() != workloadID {
-				return nil, errors.New("unexpected workload id")
-			}
-			if req.Status != nil {
-				return nil, errors.New("unexpected workload status")
-			}
-			if req.GetInstanceId() != workloadID {
-				return nil, errors.New("unexpected instance id")
-			}
-			containers := req.GetContainers()
-			if len(containers) != 1 {
-				return nil, errors.New("expected main container")
-			}
-			if containers[0].GetContainerId() != mainContainerID {
-				return nil, errors.New("unexpected main container id")
-			}
-			return &runnersv1.UpdateWorkloadResponse{}, nil
-		},
-		listRunners: func(_ context.Context, _ *runnersv1.ListRunnersRequest, _ ...grpc.CallOption) (*runnersv1.ListRunnersResponse, error) {
-			return &runnersv1.ListRunnersResponse{Runners: []*runnersv1.Runner{buildRunner(runnerID)}}, nil
-		},
+	enroll := testutil.FindInitContainer(request.InitContainers, assembler.ZitiEnrollContainerName)
+	if enroll == nil {
+		t.Fatal("missing enrollment container")
 	}
-
-	fakeGroups := &fakeGroupsClient{groupsByOrg: map[string][]*groupsv1.Group{testOrganizationID: {{Meta: &groupsv1.EntityMeta{Id: "group-b"}}, {Meta: &groupsv1.EntityMeta{Id: "group-a"}}, {Meta: &groupsv1.EntityMeta{Id: "group-a"}}}}}
-
-	reconciler := newTestReconciler(Config{
-		RunnerDialer: runnerDialer,
-		Runners:      runners,
-		ZitiMgmt:     zitiMgmt,
-		Groups:       fakeGroups,
-		Assembler:    testAssembler,
-	})
-	reconciler.startWorkload(ctx, AgentInstanceTarget{AgentID: agentID, AgentInstanceID: threadID})
-
-	if len(fakeGroups.requests) != 1 {
-		t.Fatalf("expected one groups lookup, got %d", len(fakeGroups.requests))
+	env := envMap(enroll.Env)
+	if env[assembler.ZitiEnrollmentTokenEnvVar] != "enrollment-jwt" || env[assembler.ZitiIdentityBasenameEnvVar] != assembler.ZitiIdentityBasename ||
+		env[assembler.ZitiEnrollmentControllerResolveHostEnvVar] != "ziti-controller-client.ziti.svc.cluster.local" || env[assembler.ZitiEnrollmentControllerPortEnvVar] != "2496" {
+		t.Fatal("invalid enrollment setup")
 	}
-	if fakeGroups.requests[0].GetMemberId() != agentID.String() {
-		t.Fatalf("expected groups lookup by agent id %s, got %s", agentID, fakeGroups.requests[0].GetMemberId())
+	sidecar := testutil.FindInitContainer(request.InitContainers, assembler.ZitiSidecarContainerName)
+	if sidecar == nil {
+		t.Fatal("missing ziti sidecar")
 	}
-	// Groups is called as the platform, never as the agent being read.
-	assertStringSet(t, fakeGroups.identityIDs, []string{testPlatformIdentityID.String()})
-	if !reflect.DeepEqual(calls, []string{"dial", "create", "create-workload", "start", "update-workload"}) {
-		t.Fatalf("unexpected call order: %v", calls)
+	if _, ok := envMap(sidecar.Env)[assembler.ZitiEnrollmentTokenEnvVar]; ok {
+		t.Fatal("enrollment token exposed to runtime sidecar")
+	}
+	if len(groups.requests) != 1 || groups.requests[0].GetMemberId() != target.AgentID.String() {
+		t.Fatal("wrong group lookup")
+	}
+	assertStringSet(t, groups.identityIDs, []string{testPlatformIdentityID.String()})
+	if f.w.Status != runnersv1.WorkloadStatus_WORKLOAD_STATUS_STARTING || f.w.GetInstanceId() != m.Id || f.w.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_ACTIVE {
+		t.Fatal("activation did not preserve bound, not-yet-ready state")
 	}
 }
 
 func TestStartWorkloadSkipsIdentityWhenZitiMgmtNil(t *testing.T) {
-	ctx := context.Background()
-	agentID := uuid.New()
-	threadID := uuid.New()
-	runnerID := "runner-1"
-	mainContainerID := "container-main"
-	testAssembler := newTestAssembler(agentID, false)
-
-	var calls []string
-	var workloadID string
-	runner := &fakeRunnerClient{
-		startWorkload: func(_ context.Context, req *runnerv1.StartWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error) {
-			calls = append(calls, "start")
-			if req.GetMain() == nil {
-				return nil, errors.New("missing main container")
-			}
-			if req.GetWorkloadId() == "" {
-				return nil, errors.New("missing workload id")
-			}
-			if req.GetWorkloadId() != workloadID {
-				return nil, errors.New("unexpected workload id")
-			}
-			labelKey := assembler.LabelKeyPrefix + assembler.LabelWorkloadKey
-			if req.GetAdditionalProperties()[labelKey] != workloadID {
-				return nil, errors.New("unexpected workload key label")
-			}
-			mainEnvs := envMap(req.GetMain().GetEnv())
-			if mainEnvs["WORKLOAD_ID"] != workloadID {
-				return nil, errors.New("missing WORKLOAD_ID")
-			}
-			zitiEnroll := testutil.FindInitContainer(req.GetInitContainers(), assembler.ZitiEnrollContainerName)
-			if zitiEnroll != nil {
-				envs := envMap(zitiEnroll.GetEnv())
-				if _, ok := envs[assembler.ZitiEnrollmentTokenEnvVar]; ok {
-					return nil, errors.New("unexpected ZITI_ENROLL_TOKEN")
-				}
-			}
-			return &runnerv1.StartWorkloadResponse{
-				Id:     workloadID,
-				Status: runnerv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
-				Containers: &runnerv1.WorkloadContainers{
-					Main: mainContainerID,
-				},
-			}, nil
-		},
+	f, target := preparedAgentAssemblyFixture(t, false)
+	f.r.startWorkload(context.Background(), target)
+	if f.activations != 1 || f.lastMetadata.ZitiIdentityId != "" {
+		t.Fatal("unexpected identity or missing activation")
 	}
-	runnerDialer := &fakeRunnerDialer{
-		dial: func(_ context.Context, id string) (runnerv1.RunnerServiceClient, error) {
-			calls = append(calls, "dial")
-			if id != runnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return runner, nil
-		},
+	request := f.lastRequest.Workload
+	if request.Main == nil || request.WorkloadId != f.w.Meta.Id || envMap(request.Main.Env)["WORKLOAD_ID"] != f.w.Meta.Id ||
+		request.AdditionalProperties[assembler.LabelKeyPrefix+assembler.LabelWorkloadKey] != f.w.Meta.Id {
+		t.Fatal("missing native workload identity")
 	}
-
-	runners := &fakeRunnersClient{
-		createWorkload: func(_ context.Context, req *runnersv1.CreateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.CreateWorkloadResponse, error) {
-			calls = append(calls, "create-workload")
-			if req.GetId() == "" {
-				return nil, errors.New("missing workload id")
-			}
-			workloadID = req.GetId()
-			if req.GetRunnerId() != runnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			if req.GetAgentId() != agentID.String() || req.GetThreadId() != threadID.String() {
-				return nil, errors.New("unexpected identifiers")
-			}
-			if req.GetZitiIdentityId() != "" {
-				return nil, errors.New("unexpected ziti identity id")
-			}
-			if req.GetStatus() != runnersv1.WorkloadStatus_WORKLOAD_STATUS_STARTING {
-				return nil, errors.New("unexpected workload status")
-			}
-			return &runnersv1.CreateWorkloadResponse{}, nil
-		},
-		updateWorkload: func(_ context.Context, req *runnersv1.UpdateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
-			calls = append(calls, "update-workload")
-			if req.GetId() != workloadID {
-				return nil, errors.New("unexpected workload id")
-			}
-			if req.Status != nil {
-				return nil, errors.New("unexpected workload status")
-			}
-			if req.GetInstanceId() != workloadID {
-				return nil, errors.New("unexpected instance id")
-			}
-			containers := req.GetContainers()
-			if len(containers) != 1 {
-				return nil, errors.New("expected main container")
-			}
-			if containers[0].GetContainerId() != mainContainerID {
-				return nil, errors.New("unexpected main container id")
-			}
-			return &runnersv1.UpdateWorkloadResponse{}, nil
-		},
-		listRunners: func(_ context.Context, _ *runnersv1.ListRunnersRequest, _ ...grpc.CallOption) (*runnersv1.ListRunnersResponse, error) {
-			return &runnersv1.ListRunnersResponse{Runners: []*runnersv1.Runner{buildRunner(runnerID)}}, nil
-		},
-	}
-
-	reconciler := newTestReconciler(Config{
-		RunnerDialer: runnerDialer,
-		Runners:      runners,
-		Assembler:    testAssembler,
-	})
-	reconciler.startWorkload(ctx, AgentInstanceTarget{AgentID: agentID, AgentInstanceID: threadID})
-
-	if !reflect.DeepEqual(calls, []string{"dial", "create-workload", "start", "update-workload"}) {
-		t.Fatalf("unexpected call order: %v", calls)
+	if enroll := testutil.FindInitContainer(request.InitContainers, assembler.ZitiEnrollContainerName); enroll != nil {
+		if _, ok := envMap(enroll.Env)[assembler.ZitiEnrollmentTokenEnvVar]; ok {
+			t.Fatal("unexpected enrollment token")
+		}
 	}
 }
 
 func TestStartWorkloadPinsRunnerFromVolumes(t *testing.T) {
-	ctx := context.Background()
-	agentID := uuid.New()
-	threadID := uuid.New()
-	runnerID := "runner-1"
-	volumeKey := "volume-1"
-	mainContainerID := "container-main"
-	testAssembler := newTestAssembler(agentID, false)
-
-	var calls []string
-	var workloadID string
-	runner := &fakeRunnerClient{
-		startWorkload: func(_ context.Context, req *runnerv1.StartWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error) {
-			calls = append(calls, "start")
-			workloadID = req.GetWorkloadId()
-			return &runnerv1.StartWorkloadResponse{
-				Id:     workloadID,
-				Status: runnerv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
-				Containers: &runnerv1.WorkloadContainers{
-					Main: mainContainerID,
-				},
-			}, nil
-		},
+	f, target := preparedAgentAssemblyFixture(t, false)
+	f.v.RunnerId = "runner-pinned"
+	reads := 0
+	f.registry.listVolumesByAgentInstance = func(_ context.Context, req *runnersv1.ListVolumesByAgentInstanceRequest, _ ...grpc.CallOption) (*runnersv1.ListVolumesByAgentInstanceResponse, error) {
+		reads++
+		if req.AgentInstanceId != target.AgentInstanceID.String() {
+			t.Fatal("wrong owner pin query")
+		}
+		return &runnersv1.ListVolumesByAgentInstanceResponse{Volumes: []*runnersv1.Volume{{Meta: &runnersv1.EntityMeta{Id: uuid.NewString()}, RunnerId: f.v.RunnerId, Status: runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE, AgentInstanceId: stringPtr(target.AgentInstanceID.String())}}}, nil
 	}
-	runnerDialer := &fakeRunnerDialer{
-		dial: func(_ context.Context, id string) (runnerv1.RunnerServiceClient, error) {
-			calls = append(calls, "dial")
-			if id != runnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return runner, nil
-		},
+	f.registry.getRunner = func(_ context.Context, req *runnersv1.GetRunnerRequest, _ ...grpc.CallOption) (*runnersv1.GetRunnerResponse, error) {
+		if req.Id != f.v.RunnerId {
+			t.Fatal("wrong pinned runner")
+		}
+		return &runnersv1.GetRunnerResponse{Runner: buildRunner(f.v.RunnerId)}, nil
 	}
-
-	runners := &fakeRunnersClient{
-		listVolumesByThread: func(_ context.Context, req *runnersv1.ListVolumesByThreadRequest, _ ...grpc.CallOption) (*runnersv1.ListVolumesByThreadResponse, error) {
-			calls = append(calls, "list-volumes")
-			if req.GetThreadId() != threadID.String() {
-				return nil, errors.New("unexpected thread id")
-			}
-			return &runnersv1.ListVolumesByThreadResponse{Volumes: []*runnersv1.Volume{
-				{
-					Meta:            &runnersv1.EntityMeta{Id: volumeKey},
-					RunnerId:        runnerID,
-					Status:          runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE,
-					AgentInstanceId: stringPtr(threadID.String()),
-					VolumeId:        "volume-id",
-				},
-			}}, nil
-		},
-		getRunner: func(_ context.Context, req *runnersv1.GetRunnerRequest, _ ...grpc.CallOption) (*runnersv1.GetRunnerResponse, error) {
-			calls = append(calls, "get-runner")
-			if req.GetId() != runnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return &runnersv1.GetRunnerResponse{Runner: buildRunner(runnerID)}, nil
-		},
-		createWorkload: func(_ context.Context, req *runnersv1.CreateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.CreateWorkloadResponse, error) {
-			calls = append(calls, "create-workload")
-			if req.GetRunnerId() != runnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return &runnersv1.CreateWorkloadResponse{}, nil
-		},
-		updateWorkload: func(_ context.Context, req *runnersv1.UpdateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
-			calls = append(calls, "update-workload")
-			if req.GetInstanceId() == "" {
-				return nil, errors.New("missing instance id")
-			}
-			return &runnersv1.UpdateWorkloadResponse{}, nil
-		},
-		listRunners: func(context.Context, *runnersv1.ListRunnersRequest, ...grpc.CallOption) (*runnersv1.ListRunnersResponse, error) {
-			return nil, errors.New("unexpected list runners")
-		},
+	f.registry.listRunners = func(context.Context, *runnersv1.ListRunnersRequest, ...grpc.CallOption) (*runnersv1.ListRunnersResponse, error) {
+		t.Fatal("pin ignored")
+		return nil, errNotImplemented
 	}
-
-	reconciler := newTestReconciler(Config{
-		RunnerDialer: runnerDialer,
-		Runners:      runners,
-		Assembler:    testAssembler,
-	})
-	reconciler.startWorkload(ctx, AgentInstanceTarget{AgentID: agentID, AgentInstanceID: threadID})
-
-	if !reflect.DeepEqual(calls, []string{"list-volumes", "get-runner", "dial", "create-workload", "start", "update-workload"}) {
-		t.Fatalf("unexpected call order: %v", calls)
+	f.r.startWorkload(context.Background(), target)
+	if reads != 1 || f.activations != 1 || f.lastMetadata.RunnerId != f.v.RunnerId {
+		t.Fatal("pinned prepared startup failed")
 	}
 }
 
@@ -489,457 +210,134 @@ func TestStartWorkloadDegradesWhenPinnedRunnerNotEnrolled(t *testing.T) {
 }
 
 func TestStartWorkloadPlacesEnvironmentAgentOnEnvironmentRunner(t *testing.T) {
-	ctx := context.Background()
-	agentID := uuid.New()
-	threadID := uuid.New()
-	environmentID := uuid.New()
-	environmentRunnerID := "runner-environment"
-	mainContainerID := "container-main"
-	testAssembler := newTestEnvironmentAssembler(agentID, environmentID, environmentRunnerID)
-
-	var calls []string
-	runner := &fakeRunnerClient{
-		startWorkload: func(_ context.Context, req *runnerv1.StartWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error) {
-			calls = append(calls, "start")
-			if req.GetMain().GetImage() != testEnvironmentImage {
-				return nil, errors.New("unexpected main image")
-			}
-			return &runnerv1.StartWorkloadResponse{
-				Id:     req.GetWorkloadId(),
-				Status: runnerv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
-				Containers: &runnerv1.WorkloadContainers{
-					Main: mainContainerID,
-				},
-			}, nil
-		},
+	f, target := preparedAgentAssemblyFixture(t, false)
+	f.v.RunnerId = "runner-environment"
+	f.r.assembler = newTestEnvironmentAssembler(target.AgentID, uuid.New(), f.v.RunnerId)
+	reads := 0
+	f.registry.listVolumesByAgentInstance = func(_ context.Context, req *runnersv1.ListVolumesByAgentInstanceRequest, _ ...grpc.CallOption) (*runnersv1.ListVolumesByAgentInstanceResponse, error) {
+		reads++
+		if req.AgentInstanceId != target.AgentInstanceID.String() {
+			t.Fatal("wrong owner pin query")
+		}
+		return &runnersv1.ListVolumesByAgentInstanceResponse{}, nil
 	}
-	runnerDialer := &fakeRunnerDialer{
-		dial: func(_ context.Context, id string) (runnerv1.RunnerServiceClient, error) {
-			calls = append(calls, "dial")
-			if id != environmentRunnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return runner, nil
-		},
+	f.registry.getRunner = func(_ context.Context, req *runnersv1.GetRunnerRequest, _ ...grpc.CallOption) (*runnersv1.GetRunnerResponse, error) {
+		if req.Id != f.v.RunnerId {
+			t.Fatal("wrong environment runner")
+		}
+		return &runnersv1.GetRunnerResponse{Runner: buildRunner(f.v.RunnerId)}, nil
 	}
-
-	runners := &fakeRunnersClient{
-		listVolumesByThread: func(_ context.Context, req *runnersv1.ListVolumesByThreadRequest, _ ...grpc.CallOption) (*runnersv1.ListVolumesByThreadResponse, error) {
-			calls = append(calls, "list-volumes")
-			if req.GetThreadId() != threadID.String() {
-				return nil, errors.New("unexpected thread id")
-			}
-			return &runnersv1.ListVolumesByThreadResponse{}, nil
-		},
-		getRunner: func(_ context.Context, req *runnersv1.GetRunnerRequest, _ ...grpc.CallOption) (*runnersv1.GetRunnerResponse, error) {
-			calls = append(calls, "get-runner")
-			if req.GetId() != environmentRunnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return &runnersv1.GetRunnerResponse{Runner: buildRunner(environmentRunnerID)}, nil
-		},
-		createWorkload: func(_ context.Context, req *runnersv1.CreateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.CreateWorkloadResponse, error) {
-			calls = append(calls, "create-workload")
-			if req.GetRunnerId() != environmentRunnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return &runnersv1.CreateWorkloadResponse{}, nil
-		},
-		updateWorkload: func(_ context.Context, req *runnersv1.UpdateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
-			calls = append(calls, "update-workload")
-			if req.GetInstanceId() == "" {
-				return nil, errors.New("missing instance id")
-			}
-			return &runnersv1.UpdateWorkloadResponse{}, nil
-		},
-		listRunners: func(context.Context, *runnersv1.ListRunnersRequest, ...grpc.CallOption) (*runnersv1.ListRunnersResponse, error) {
-			return nil, errors.New("unexpected list runners")
-		},
+	f.registry.listRunners = func(context.Context, *runnersv1.ListRunnersRequest, ...grpc.CallOption) (*runnersv1.ListRunnersResponse, error) {
+		t.Fatal("environment placement ignored")
+		return nil, errNotImplemented
 	}
-
-	reconciler := newTestReconciler(Config{
-		RunnerDialer: runnerDialer,
-		Runners:      runners,
-		Assembler:    testAssembler,
-	})
-	reconciler.startWorkload(ctx, AgentInstanceTarget{AgentInstanceID: threadID, AgentID: agentID, ThreadID: threadID})
-
-	// No list-runners: the environment's runner replaces label and capability
-	// selection for an unpinned thread.
-	if !reflect.DeepEqual(calls, []string{"list-volumes", "get-runner", "dial", "create-workload", "start", "update-workload"}) {
-		t.Fatalf("unexpected call order: %v", calls)
+	target.ThreadID = target.AgentInstanceID
+	f.r.startWorkload(context.Background(), target)
+	if reads != 1 || f.activations != 1 || f.lastMetadata.RunnerId != f.v.RunnerId || f.lastRequest.Workload.Main.Image != testEnvironmentImage {
+		t.Fatal("environment prepared startup failed")
 	}
 }
 
 func TestStartWorkloadKeepsPinnedRunnerWhenEnvironmentNamesAnother(t *testing.T) {
-	ctx := context.Background()
-	agentID := uuid.New()
-	threadID := uuid.New()
-	environmentID := uuid.New()
-	environmentRunnerID := "runner-environment"
-	pinnedRunnerID := "runner-pinned"
-	volumeKey := "volume-1"
-	mainContainerID := "container-main"
-	testAssembler := newTestEnvironmentAssembler(agentID, environmentID, environmentRunnerID)
-
-	var calls []string
-	threads := &fakeThreadsClient{
-		degradeThread: func(context.Context, *threadsv1.DegradeThreadRequest, ...grpc.CallOption) (*threadsv1.DegradeThreadResponse, error) {
-			calls = append(calls, "degrade")
-			return &threadsv1.DegradeThreadResponse{}, nil
-		},
+	f, target := preparedAgentAssemblyFixture(t, false)
+	f.v.RunnerId = "runner-pinned"
+	f.r.assembler = newTestEnvironmentAssembler(target.AgentID, uuid.New(), "runner-environment")
+	f.registry.listVolumesByAgentInstance = func(_ context.Context, req *runnersv1.ListVolumesByAgentInstanceRequest, _ ...grpc.CallOption) (*runnersv1.ListVolumesByAgentInstanceResponse, error) {
+		if req.AgentInstanceId != target.AgentInstanceID.String() {
+			t.Fatal("wrong owner pin query")
+		}
+		return &runnersv1.ListVolumesByAgentInstanceResponse{Volumes: []*runnersv1.Volume{{Meta: &runnersv1.EntityMeta{Id: uuid.NewString()}, RunnerId: f.v.RunnerId, Status: runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE, ThreadId: target.AgentInstanceID.String()}}}, nil
 	}
-	runner := &fakeRunnerClient{
-		startWorkload: func(_ context.Context, req *runnerv1.StartWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error) {
-			calls = append(calls, "start")
-			return &runnerv1.StartWorkloadResponse{
-				Id:     req.GetWorkloadId(),
-				Status: runnerv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
-				Containers: &runnerv1.WorkloadContainers{
-					Main: mainContainerID,
-				},
-			}, nil
-		},
+	f.registry.getRunner = func(_ context.Context, req *runnersv1.GetRunnerRequest, _ ...grpc.CallOption) (*runnersv1.GetRunnerResponse, error) {
+		if req.Id != f.v.RunnerId {
+			t.Fatal("environment overrode workspace pin")
+		}
+		return &runnersv1.GetRunnerResponse{Runner: buildRunner(f.v.RunnerId)}, nil
 	}
-	runnerDialer := &fakeRunnerDialer{
-		dial: func(_ context.Context, id string) (runnerv1.RunnerServiceClient, error) {
-			calls = append(calls, "dial")
-			if id != pinnedRunnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return runner, nil
-		},
+	f.registry.listRunners = func(context.Context, *runnersv1.ListRunnersRequest, ...grpc.CallOption) (*runnersv1.ListRunnersResponse, error) {
+		t.Fatal("pin ignored")
+		return nil, errNotImplemented
 	}
-
-	runners := &fakeRunnersClient{
-		listVolumesByThread: func(_ context.Context, req *runnersv1.ListVolumesByThreadRequest, _ ...grpc.CallOption) (*runnersv1.ListVolumesByThreadResponse, error) {
-			calls = append(calls, "list-volumes")
-			if req.GetThreadId() != threadID.String() {
-				return nil, errors.New("unexpected thread id")
-			}
-			return &runnersv1.ListVolumesByThreadResponse{Volumes: []*runnersv1.Volume{
-				{
-					Meta:     &runnersv1.EntityMeta{Id: volumeKey},
-					RunnerId: pinnedRunnerID,
-					Status:   runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE,
-					ThreadId: threadID.String(),
-					VolumeId: "volume-id",
-				},
-			}}, nil
-		},
-		getRunner: func(_ context.Context, req *runnersv1.GetRunnerRequest, _ ...grpc.CallOption) (*runnersv1.GetRunnerResponse, error) {
-			calls = append(calls, "get-runner")
-			if req.GetId() != pinnedRunnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return &runnersv1.GetRunnerResponse{Runner: buildRunner(pinnedRunnerID)}, nil
-		},
-		createWorkload: func(_ context.Context, req *runnersv1.CreateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.CreateWorkloadResponse, error) {
-			calls = append(calls, "create-workload")
-			if req.GetRunnerId() != pinnedRunnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return &runnersv1.CreateWorkloadResponse{}, nil
-		},
-		updateWorkload: func(_ context.Context, req *runnersv1.UpdateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
-			calls = append(calls, "update-workload")
-			if req.GetInstanceId() == "" {
-				return nil, errors.New("missing instance id")
-			}
-			return &runnersv1.UpdateWorkloadResponse{}, nil
-		},
-		listRunners: func(context.Context, *runnersv1.ListRunnersRequest, ...grpc.CallOption) (*runnersv1.ListRunnersResponse, error) {
-			return nil, errors.New("unexpected list runners")
-		},
-	}
-
-	reconciler := newTestReconciler(Config{
-		RunnerDialer: runnerDialer,
-		Runners:      runners,
-		Threads:      threads,
-		Assembler:    testAssembler,
-	})
-	reconciler.startWorkload(ctx, AgentInstanceTarget{AgentInstanceID: threadID, AgentID: agentID, ThreadID: threadID})
-
-	// The pin wins over the environment's runner and is not a fault: the agent's
-	// state volume physically lives on the pinned runner, so nothing degrades.
-	if !reflect.DeepEqual(calls, []string{"list-volumes", "get-runner", "dial", "create-workload", "start", "update-workload"}) {
-		t.Fatalf("unexpected call order: %v", calls)
+	f.r.agents = &testutil.FakeAgentsClient{PauseInstanceFunc: func(context.Context, *agentsv1.PauseInstanceRequest, ...grpc.CallOption) (*agentsv1.PauseInstanceResponse, error) {
+		t.Fatal("valid pinned placement paused")
+		return nil, errNotImplemented
+	}}
+	target.ThreadID = target.AgentInstanceID
+	f.r.startWorkload(context.Background(), target)
+	if f.activations != 1 || f.lastMetadata.RunnerId != f.v.RunnerId {
+		t.Fatal("pinned prepared startup failed")
 	}
 }
 
-func TestStartWorkloadDeletesIdentityOnRunnerError(t *testing.T) {
-	ctx := context.Background()
-	agentID := uuid.New()
-	threadID := uuid.New()
-	zitiID := "ziti-identity"
-	runnerID := "runner-1"
-	testAssembler := newTestAssembler(agentID, true)
-
-	var calls []string
-	zitiMgmt := &fakeZitiMgmtClient{
-		createAgentIdentity: func(_ context.Context, req *zitimgmtv1.CreateAgentIdentityRequest, _ ...grpc.CallOption) (*zitimgmtv1.CreateAgentIdentityResponse, error) {
-			calls = append(calls, "create")
-			if req.GetWorkloadId() == "" {
-				return nil, errors.New("missing workload id")
-			}
-			return &zitimgmtv1.CreateAgentIdentityResponse{ZitiIdentityId: zitiID, EnrollmentJwt: "jwt"}, nil
+func TestStartWorkloadRetainsIdentityOnUnknownRunnerOutcome(t *testing.T) {
+	f, target := preparedAgentAssemblyFixture(t, true)
+	f.r.zitiMgmt = &fakeZitiMgmtClient{
+		createAgentIdentity: func(context.Context, *zitimgmtv1.CreateAgentIdentityRequest, ...grpc.CallOption) (*zitimgmtv1.CreateAgentIdentityResponse, error) {
+			return &zitimgmtv1.CreateAgentIdentityResponse{ZitiIdentityId: "ziti-identity", EnrollmentJwt: "jwt"}, nil
 		},
-		deleteIdentity: func(_ context.Context, req *zitimgmtv1.DeleteIdentityRequest, _ ...grpc.CallOption) (*zitimgmtv1.DeleteIdentityResponse, error) {
-			calls = append(calls, "delete")
-			if req.GetZitiIdentityId() != zitiID {
-				return nil, errors.New("unexpected ziti identity id")
-			}
-			return &zitimgmtv1.DeleteIdentityResponse{}, nil
+		deleteIdentity: func(context.Context, *zitimgmtv1.DeleteIdentityRequest, ...grpc.CallOption) (*zitimgmtv1.DeleteIdentityResponse, error) {
+			t.Fatal("uncertain execution lost identity")
+			return nil, errNotImplemented
 		},
 	}
-
-	runner := &fakeRunnerClient{
-		startWorkload: func(_ context.Context, _ *runnerv1.StartWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error) {
-			calls = append(calls, "start")
-			return nil, errors.New("runner error")
-		},
+	calls := 0
+	f.native.prepareWorkload = func(context.Context, *runnerv1.PrepareWorkloadRequest, ...grpc.CallOption) (*runnerv1.PrepareWorkloadResponse, error) {
+		calls++
+		return nil, errors.New("runner error")
 	}
-	runnerDialer := &fakeRunnerDialer{
-		dial: func(_ context.Context, id string) (runnerv1.RunnerServiceClient, error) {
-			calls = append(calls, "dial")
-			if id != runnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return runner, nil
-		},
-	}
-
-	runners := &fakeRunnersClient{
-		createWorkload: func(_ context.Context, req *runnersv1.CreateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.CreateWorkloadResponse, error) {
-			calls = append(calls, "create-workload")
-			if req.GetId() == "" {
-				return nil, errors.New("missing workload id")
-			}
-			return &runnersv1.CreateWorkloadResponse{}, nil
-		},
-		updateWorkload: func(_ context.Context, req *runnersv1.UpdateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
-			calls = append(calls, "update-workload")
-			if req.GetStatus() != runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED {
-				return nil, errors.New("unexpected workload status")
-			}
-			if req.GetFailureReason() != runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_START_FAILED {
-				return nil, errors.New("unexpected failure reason")
-			}
-			if req.GetFailureMessage() != "runner error" {
-				return nil, errors.New("unexpected failure message")
-			}
-			if req.GetRemovalConfirmedAt() != nil {
-				t.Fatal("lost start reply must not claim removal")
-			}
-			return &runnersv1.UpdateWorkloadResponse{}, nil
-		},
-		listRunners: func(_ context.Context, _ *runnersv1.ListRunnersRequest, _ ...grpc.CallOption) (*runnersv1.ListRunnersResponse, error) {
-			return &runnersv1.ListRunnersResponse{Runners: []*runnersv1.Runner{buildRunner(runnerID)}}, nil
-		},
-	}
-
-	reconciler := newTestReconciler(Config{
-		RunnerDialer: runnerDialer,
-		ZitiMgmt:     zitiMgmt,
-		Runners:      runners,
-		Assembler:    testAssembler,
-	})
-	reconciler.startWorkload(ctx, AgentInstanceTarget{AgentID: agentID, AgentInstanceID: threadID})
-
-	if !reflect.DeepEqual(calls, []string{"dial", "create", "create-workload", "start", "update-workload", "delete"}) {
-		t.Fatalf("unexpected call order: %v", calls)
+	f.r.startWorkload(context.Background(), target)
+	if calls != 1 || f.w == nil || f.w.Status != runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED || f.w.RemovalConfirmedAt != nil ||
+		f.w.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING || f.activations != 0 || f.removals != 0 {
+		t.Fatal("unknown prepare was replayed or released")
 	}
 }
 
-func TestStartWorkloadRollsBackOnWorkloadIDMismatch(t *testing.T) {
-	ctx := context.Background()
-	agentID := uuid.New()
-	threadID := uuid.New()
-	zitiID := "ziti-identity"
-	runnerID := "runner-1"
-	instanceID := "runner-workload-1"
-	mainContainerID := "container-main"
-	testAssembler := newTestAssembler(agentID, true)
-
-	var calls []string
-	var workloadID string
-	zitiMgmt := &fakeZitiMgmtClient{
-		createAgentIdentity: func(_ context.Context, req *zitimgmtv1.CreateAgentIdentityRequest, _ ...grpc.CallOption) (*zitimgmtv1.CreateAgentIdentityResponse, error) {
-			calls = append(calls, "create")
-			workloadID = req.GetWorkloadId()
-			if workloadID == "" {
-				return nil, errors.New("missing workload id")
-			}
-			return &zitimgmtv1.CreateAgentIdentityResponse{ZitiIdentityId: zitiID, EnrollmentJwt: "jwt"}, nil
+func TestStartWorkloadDoesNotStopUnverifiedWorkloadID(t *testing.T) {
+	f, target := preparedAgentAssemblyFixture(t, true)
+	f.r.zitiMgmt = &fakeZitiMgmtClient{
+		createAgentIdentity: func(context.Context, *zitimgmtv1.CreateAgentIdentityRequest, ...grpc.CallOption) (*zitimgmtv1.CreateAgentIdentityResponse, error) {
+			return &zitimgmtv1.CreateAgentIdentityResponse{ZitiIdentityId: "ziti-identity", EnrollmentJwt: "jwt"}, nil
 		},
-		deleteIdentity: func(_ context.Context, req *zitimgmtv1.DeleteIdentityRequest, _ ...grpc.CallOption) (*zitimgmtv1.DeleteIdentityResponse, error) {
-			calls = append(calls, "delete")
-			if req.GetZitiIdentityId() != zitiID {
-				return nil, errors.New("unexpected ziti identity id")
-			}
-			return &zitimgmtv1.DeleteIdentityResponse{}, nil
+		deleteIdentity: func(context.Context, *zitimgmtv1.DeleteIdentityRequest, ...grpc.CallOption) (*zitimgmtv1.DeleteIdentityResponse, error) {
+			t.Fatal("unverified binding lost identity")
+			return nil, errNotImplemented
 		},
 	}
-
-	runner := &fakeRunnerClient{
-		startWorkload: func(_ context.Context, req *runnerv1.StartWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error) {
-			calls = append(calls, "start")
-			if req.GetWorkloadId() != workloadID {
-				return nil, errors.New("unexpected workload id")
-			}
-			return &runnerv1.StartWorkloadResponse{
-				Id:     instanceID,
-				Status: runnerv1.WorkloadStatus_WORKLOAD_STATUS_RUNNING,
-				Containers: &runnerv1.WorkloadContainers{
-					Main: mainContainerID,
-				},
-			}, nil
-		},
-		stopWorkload: func(_ context.Context, req *runnerv1.StopWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error) {
-			calls = append(calls, "stop")
-			if req.GetWorkloadId() != instanceID {
-				return nil, errors.New("unexpected workload id")
-			}
-			return &runnerv1.StopWorkloadResponse{}, nil
-		},
+	prepare := f.native.prepareWorkload
+	f.native.prepareWorkload = func(ctx context.Context, req *runnerv1.PrepareWorkloadRequest, opts ...grpc.CallOption) (*runnerv1.PrepareWorkloadResponse, error) {
+		response, err := prepare(ctx, req, opts...)
+		response.Binding.WorkloadId, response.Workload.Id = uuid.NewString(), uuid.NewString()
+		return response, err
 	}
-	runnerDialer := &fakeRunnerDialer{
-		dial: func(_ context.Context, id string) (runnerv1.RunnerServiceClient, error) {
-			calls = append(calls, "dial")
-			if id != runnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return runner, nil
-		},
-	}
-
-	runners := &fakeRunnersClient{
-		createWorkload: func(_ context.Context, req *runnersv1.CreateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.CreateWorkloadResponse, error) {
-			calls = append(calls, "create-workload")
-			if req.GetId() == "" {
-				return nil, errors.New("missing workload id")
-			}
-			if workloadID == "" {
-				return nil, errors.New("missing workload id")
-			}
-			if req.GetId() != workloadID {
-				return nil, errors.New("unexpected workload id")
-			}
-			if req.GetRunnerId() != runnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return &runnersv1.CreateWorkloadResponse{}, nil
-		},
-		updateWorkload: func(_ context.Context, req *runnersv1.UpdateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
-			calls = append(calls, "update-workload")
-			if req.GetId() != workloadID {
-				return nil, errors.New("unexpected workload id")
-			}
-			if req.GetStatus() != runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED {
-				return nil, errors.New("unexpected workload status")
-			}
-			if req.GetFailureReason() != runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_START_FAILED {
-				return nil, errors.New("unexpected failure reason")
-			}
-			if req.GetFailureMessage() != "workload id mismatch" {
-				return nil, errors.New("unexpected failure message")
-			}
-			if req.GetInstanceId() != instanceID {
-				return nil, errors.New("unexpected instance id")
-			}
-			if req.GetRemovalConfirmedAt() != nil {
-				t.Fatal("stop acknowledgement must not claim removal")
-			}
-			return &runnersv1.UpdateWorkloadResponse{}, nil
-		},
-		listRunners: func(_ context.Context, _ *runnersv1.ListRunnersRequest, _ ...grpc.CallOption) (*runnersv1.ListRunnersResponse, error) {
-			return &runnersv1.ListRunnersResponse{Runners: []*runnersv1.Runner{buildRunner(runnerID)}}, nil
-		},
-	}
-
-	reconciler := newTestReconciler(Config{
-		RunnerDialer: runnerDialer,
-		ZitiMgmt:     zitiMgmt,
-		Runners:      runners,
-		Assembler:    testAssembler,
-	})
-	reconciler.startWorkload(ctx, AgentInstanceTarget{AgentID: agentID, AgentInstanceID: threadID})
-
-	if !reflect.DeepEqual(calls, []string{"dial", "create", "create-workload", "start", "stop", "update-workload", "delete"}) {
-		t.Fatalf("unexpected call order: %v", calls)
+	f.r.startWorkload(context.Background(), target)
+	if f.prepares != 1 || f.activations != 0 || f.removals != 0 || f.w.RemovalConfirmedAt != nil || f.w.GetInstanceId() != "" || f.w.Preparation.Binding != nil {
+		t.Fatal("unverified native identity was adopted or stopped")
 	}
 }
 
-func TestStartWorkloadStopsAndDeletesIdentityOnStoreFailure(t *testing.T) {
-	ctx := context.Background()
-	agentID := uuid.New()
-	threadID := uuid.New()
-	zitiID := "ziti-identity"
-	runnerID := "runner-1"
-	testAssembler := newTestAssembler(agentID, true)
-
-	var calls []string
-	zitiMgmt := &fakeZitiMgmtClient{
-		createAgentIdentity: func(_ context.Context, req *zitimgmtv1.CreateAgentIdentityRequest, _ ...grpc.CallOption) (*zitimgmtv1.CreateAgentIdentityResponse, error) {
-			calls = append(calls, "create")
-			if req.GetWorkloadId() == "" {
-				return nil, errors.New("missing workload id")
-			}
-			return &zitimgmtv1.CreateAgentIdentityResponse{ZitiIdentityId: zitiID, EnrollmentJwt: "jwt"}, nil
+func TestStartWorkloadRetainsResourcesOnUncertainReservation(t *testing.T) {
+	f, target := preparedAgentAssemblyFixture(t, true)
+	f.r.zitiMgmt = &fakeZitiMgmtClient{
+		createAgentIdentity: func(context.Context, *zitimgmtv1.CreateAgentIdentityRequest, ...grpc.CallOption) (*zitimgmtv1.CreateAgentIdentityResponse, error) {
+			return &zitimgmtv1.CreateAgentIdentityResponse{ZitiIdentityId: "ziti-identity", EnrollmentJwt: "jwt"}, nil
 		},
-		deleteIdentity: func(_ context.Context, req *zitimgmtv1.DeleteIdentityRequest, _ ...grpc.CallOption) (*zitimgmtv1.DeleteIdentityResponse, error) {
-			calls = append(calls, "delete")
-			if req.GetZitiIdentityId() != zitiID {
-				return nil, errors.New("unexpected ziti identity id")
-			}
-			return &zitimgmtv1.DeleteIdentityResponse{}, nil
+		deleteIdentity: func(context.Context, *zitimgmtv1.DeleteIdentityRequest, ...grpc.CallOption) (*zitimgmtv1.DeleteIdentityResponse, error) {
+			t.Fatal("uncertain reservation compensated")
+			return nil, errNotImplemented
 		},
 	}
-
-	runner := &fakeRunnerClient{
-		startWorkload: func(_ context.Context, _ *runnerv1.StartWorkloadRequest, _ ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error) {
-			calls = append(calls, "start")
-			return nil, errors.New("unexpected start")
-		},
+	create := f.registry.createPreparedWorkload
+	calls := 0
+	f.registry.createPreparedWorkload = func(ctx context.Context, req *runnersv1.CreatePreparedWorkloadRequest, opts ...grpc.CallOption) (*runnersv1.CreatePreparedWorkloadResponse, error) {
+		calls++
+		if _, err := create(ctx, req, opts...); err != nil {
+			t.Fatal(err)
+		}
+		return nil, errors.New("lost registry reply")
 	}
-	runnerDialer := &fakeRunnerDialer{
-		dial: func(_ context.Context, id string) (runnerv1.RunnerServiceClient, error) {
-			calls = append(calls, "dial")
-			if id != runnerID {
-				return nil, errors.New("unexpected runner id")
-			}
-			return runner, nil
-		},
-	}
-
-	runners := &fakeRunnersClient{
-		createWorkload: func(_ context.Context, req *runnersv1.CreateWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.CreateWorkloadResponse, error) {
-			calls = append(calls, "create-workload")
-			if req.GetId() == "" {
-				return nil, errors.New("missing workload id")
-			}
-			return nil, errors.New("create error")
-		},
-		updateWorkload: func(context.Context, *runnersv1.UpdateWorkloadRequest, ...grpc.CallOption) (*runnersv1.UpdateWorkloadResponse, error) {
-			calls = append(calls, "update-workload")
-			return nil, errors.New("unexpected update")
-		},
-		listRunners: func(_ context.Context, _ *runnersv1.ListRunnersRequest, _ ...grpc.CallOption) (*runnersv1.ListRunnersResponse, error) {
-			return &runnersv1.ListRunnersResponse{Runners: []*runnersv1.Runner{buildRunner(runnerID)}}, nil
-		},
-	}
-
-	reconciler := newTestReconciler(Config{
-		RunnerDialer: runnerDialer,
-		ZitiMgmt:     zitiMgmt,
-		Runners:      runners,
-		Assembler:    testAssembler,
-	})
-	reconciler.startWorkload(ctx, AgentInstanceTarget{AgentID: agentID, AgentInstanceID: threadID})
-
-	if !reflect.DeepEqual(calls, []string{"dial", "create", "create-workload", "delete"}) {
-		t.Fatalf("unexpected call order: %v", calls)
+	f.r.startWorkload(context.Background(), target)
+	if calls != 1 || f.prepares != 0 || f.activations != 0 || f.w.RemovalConfirmedAt != nil || f.w.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_RESERVED {
+		t.Fatal("uncertain reservation authorized execution or cleanup")
 	}
 }
 
@@ -1927,6 +1325,9 @@ func (f *fakeRunnerDialer) Dial(ctx context.Context, runnerID string) (runnerv1.
 func (f *fakeRunnerDialer) Close() {}
 
 type fakeRunnersClient struct {
+	createPreparedWorkload       func(context.Context, *runnersv1.CreatePreparedWorkloadRequest, ...grpc.CallOption) (*runnersv1.CreatePreparedWorkloadResponse, error)
+	updatePreparedWorkload       func(context.Context, *runnersv1.UpdatePreparedWorkloadRequest, ...grpc.CallOption) (*runnersv1.UpdatePreparedWorkloadResponse, error)
+	getWorkload                  func(context.Context, *runnersv1.GetWorkloadRequest, ...grpc.CallOption) (*runnersv1.GetWorkloadResponse, error)
 	createVolumeChecked          func(context.Context, *runnersv1.CreateVolumeCheckedRequest, ...grpc.CallOption) (*runnersv1.CreateVolumeCheckedResponse, error)
 	updateVolumeChecked          func(context.Context, *runnersv1.UpdateVolumeCheckedRequest, ...grpc.CallOption) (*runnersv1.UpdateVolumeCheckedResponse, error)
 	createWorkload               func(context.Context, *runnersv1.CreateWorkloadRequest, ...grpc.CallOption) (*runnersv1.CreateWorkloadResponse, error)
@@ -2052,8 +1453,25 @@ func (f *fakeRunnersClient) DeleteWorkload(ctx context.Context, req *runnersv1.D
 	return nil, errNotImplemented
 }
 
-func (f *fakeRunnersClient) GetWorkload(context.Context, *runnersv1.GetWorkloadRequest, ...grpc.CallOption) (*runnersv1.GetWorkloadResponse, error) {
+func (f *fakeRunnersClient) GetWorkload(ctx context.Context, req *runnersv1.GetWorkloadRequest, opts ...grpc.CallOption) (*runnersv1.GetWorkloadResponse, error) {
+	if f.getWorkload != nil {
+		return f.getWorkload(ctx, req, opts...)
+	}
 	return nil, errNotImplemented
+}
+
+func (f *fakeRunnersClient) CreatePreparedWorkload(ctx context.Context, req *runnersv1.CreatePreparedWorkloadRequest, opts ...grpc.CallOption) (*runnersv1.CreatePreparedWorkloadResponse, error) {
+	if f.createPreparedWorkload != nil {
+		return f.createPreparedWorkload(ctx, req, opts...)
+	}
+	return nil, status.Error(codes.Unimplemented, "prepared registry unavailable")
+}
+
+func (f *fakeRunnersClient) UpdatePreparedWorkload(ctx context.Context, req *runnersv1.UpdatePreparedWorkloadRequest, opts ...grpc.CallOption) (*runnersv1.UpdatePreparedWorkloadResponse, error) {
+	if f.updatePreparedWorkload != nil {
+		return f.updatePreparedWorkload(ctx, req, opts...)
+	}
+	return nil, status.Error(codes.Unimplemented, "prepared registry unavailable")
 }
 
 func (f *fakeRunnersClient) GetVolume(ctx context.Context, req *runnersv1.GetVolumeRequest, opts ...grpc.CallOption) (*runnersv1.GetVolumeResponse, error) {
@@ -2152,14 +1570,46 @@ func (f *fakeRunnersClient) StreamWorkloadLogs(ctx context.Context, req *runnerv
 }
 
 type fakeRunnerClient struct {
-	removeVolumeBound     func(context.Context, *runnerv1.RemoveVolumeBoundRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error)
-	startWorkload         func(context.Context, *runnerv1.StartWorkloadRequest, ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error)
-	stopWorkload          func(context.Context, *runnerv1.StopWorkloadRequest, ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error)
-	listWorkloads         func(context.Context, *runnerv1.ListWorkloadsRequest, ...grpc.CallOption) (*runnerv1.ListWorkloadsResponse, error)
-	listVolumes           func(context.Context, *runnerv1.ListVolumesRequest, ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error)
-	removeVolume          func(context.Context, *runnerv1.RemoveVolumeRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeResponse, error)
-	inspectWorkload       func(context.Context, *runnerv1.InspectWorkloadRequest, ...grpc.CallOption) (*runnerv1.InspectWorkloadResponse, error)
-	findWorkloadsByLabels func(context.Context, *runnerv1.FindWorkloadsByLabelsRequest, ...grpc.CallOption) (*runnerv1.FindWorkloadsByLabelsResponse, error)
+	prepareWorkload         func(context.Context, *runnerv1.PrepareWorkloadRequest, ...grpc.CallOption) (*runnerv1.PrepareWorkloadResponse, error)
+	activateWorkload        func(context.Context, *runnerv1.ActivateWorkloadRequest, ...grpc.CallOption) (*runnerv1.ActivateWorkloadResponse, error)
+	inspectPreparedWorkload func(context.Context, *runnerv1.InspectPreparedWorkloadRequest, ...grpc.CallOption) (*runnerv1.InspectPreparedWorkloadResponse, error)
+	removePreparedWorkload  func(context.Context, *runnerv1.RemovePreparedWorkloadRequest, ...grpc.CallOption) (*runnerv1.RemovePreparedWorkloadResponse, error)
+	removeVolumeBound       func(context.Context, *runnerv1.RemoveVolumeBoundRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error)
+	startWorkload           func(context.Context, *runnerv1.StartWorkloadRequest, ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error)
+	stopWorkload            func(context.Context, *runnerv1.StopWorkloadRequest, ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error)
+	listWorkloads           func(context.Context, *runnerv1.ListWorkloadsRequest, ...grpc.CallOption) (*runnerv1.ListWorkloadsResponse, error)
+	listVolumes             func(context.Context, *runnerv1.ListVolumesRequest, ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error)
+	removeVolume            func(context.Context, *runnerv1.RemoveVolumeRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeResponse, error)
+	inspectWorkload         func(context.Context, *runnerv1.InspectWorkloadRequest, ...grpc.CallOption) (*runnerv1.InspectWorkloadResponse, error)
+	findWorkloadsByLabels   func(context.Context, *runnerv1.FindWorkloadsByLabelsRequest, ...grpc.CallOption) (*runnerv1.FindWorkloadsByLabelsResponse, error)
+}
+
+func (f *fakeRunnerClient) PrepareWorkload(ctx context.Context, req *runnerv1.PrepareWorkloadRequest, opts ...grpc.CallOption) (*runnerv1.PrepareWorkloadResponse, error) {
+	if f.prepareWorkload != nil {
+		return f.prepareWorkload(ctx, req, opts...)
+	}
+	return nil, status.Error(codes.Unimplemented, "prepared runner unavailable")
+}
+
+func (f *fakeRunnerClient) ActivateWorkload(ctx context.Context, req *runnerv1.ActivateWorkloadRequest, opts ...grpc.CallOption) (*runnerv1.ActivateWorkloadResponse, error) {
+	if f.activateWorkload != nil {
+		return f.activateWorkload(ctx, req, opts...)
+	}
+	return nil, status.Error(codes.Unimplemented, "prepared runner unavailable")
+}
+
+func (f *fakeRunnerClient) InspectPreparedWorkload(ctx context.Context, req *runnerv1.InspectPreparedWorkloadRequest, opts ...grpc.CallOption) (*runnerv1.InspectPreparedWorkloadResponse, error) {
+	if f.inspectPreparedWorkload != nil {
+		return f.inspectPreparedWorkload(ctx, req, opts...)
+	}
+	return nil, status.Error(codes.Unimplemented, "prepared runner unavailable")
+}
+
+func (f *fakeRunnerClient) RemovePreparedWorkload(ctx context.Context, req *runnerv1.RemovePreparedWorkloadRequest, opts ...grpc.CallOption) (*runnerv1.RemovePreparedWorkloadResponse, error) {
+	if f.removePreparedWorkload != nil {
+		return f.removePreparedWorkload(ctx, req, opts...)
+	}
+	return nil, status.Error(codes.Unimplemented, "prepared runner unavailable")
 }
 
 func (f *fakeRunnerClient) RemoveVolumeChecked(context.Context, *runnerv1.RemoveVolumeCheckedRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
