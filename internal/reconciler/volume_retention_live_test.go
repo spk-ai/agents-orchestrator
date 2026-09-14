@@ -23,11 +23,14 @@ import (
 	"testing"
 	"time"
 
+	agentsv1 "github.com/agynio/agents-orchestrator/.gen/go/agynio/api/agents/v1"
 	runnerv1 "github.com/agynio/agents-orchestrator/.gen/go/agynio/api/runner/v1"
 	runnersv1 "github.com/agynio/agents-orchestrator/.gen/go/agynio/api/runners/v1"
+	"github.com/agynio/agents-orchestrator/internal/testutil"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -44,7 +47,7 @@ import (
 const retentionOwnerLabel = "agyn.io/volume-retention-test"
 
 // This uses real runner RPCs and Kubernetes PVCs, but a deterministic registry
-// fake. It is not a deployed platform/database or stale-delete fencing test.
+// fake. It is not a deployed platform/database or node-fencing test.
 func TestLiveVolumeRetention(t *testing.T) {
 	if os.Getenv("RETENTION_LIVE_TEST") != "trusted-local" {
 		t.Skip("requires explicit trusted-local volume retention acceptance")
@@ -83,9 +86,9 @@ func TestLiveVolumeRetention(t *testing.T) {
 		}
 		return native.ListVolumes(ctx, req, opts...)
 	}
-	f.runner.removeVolume = func(ctx context.Context, req *runnerv1.RemoveVolumeRequest, opts ...grpc.CallOption) (*runnerv1.RemoveVolumeResponse, error) {
-		f.removed = append(f.removed, req.GetVolumeName())
-		return native.RemoveVolume(ctx, req, opts...)
+	f.runner.removeVolumeChecked = func(ctx context.Context, req *runnerv1.RemoveVolumeCheckedRequest, opts ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+		f.removed = append(f.removed, req.GetExpected().GetInstanceId())
+		return native.RemoveVolumeChecked(ctx, req, opts...)
 	}
 	reconcile := func() {
 		t.Helper()
@@ -115,7 +118,11 @@ func TestLiveVolumeRetention(t *testing.T) {
 	t.Logf("real runner retained all %d PVC UIDs across the cross-organization/closed/unknown/late-record scans", len(claims))
 
 	claims["duplicate"] = live.createClaim(t, ctx, "pvc-duplicate", "anchor")
-	anchor.Status = runnersv1.VolumeStatus_VOLUME_STATUS_DEPROVISIONING
+	checkedTestUpdate(t, anchor, &runnersv1.UpdateVolumeCheckedRequest{
+		Id: anchor.Meta.Id, ExpectedRevision: anchor.LifecycleRevision,
+		Operation: &runnersv1.UpdateVolumeCheckedRequest_BeginRemoval{BeginRemoval: &runnersv1.BeginVolumeRemoval{}},
+	})
+	originalIntent := proto.Clone(anchor.RemovalIntent).(*runnersv1.VolumeRemovalIntent)
 	f.updated = nil
 	for _, key := range []string{"anchor", ""} {
 		claim, err := live.kube.CoreV1().PersistentVolumeClaims(live.namespace).Get(ctx, claims["duplicate"].Name, metav1.GetOptions{})
@@ -165,7 +172,8 @@ func TestLiveVolumeRetention(t *testing.T) {
 	}
 	t.Log("missing label on the tracked native PVC failed inventory without closing its record")
 	reconcile()
-	if !slices.Equal(f.removed, []string{claims["anchor"].Name}) || len(f.updated) != 0 {
+	if !slices.Equal(f.removed, []string{claims["anchor"].Name}) || len(f.updated) != 1 || f.updated[0].GetBeginRemoval() == nil ||
+		anchor.Status != runnersv1.VolumeStatus_VOLUME_STATUS_DEPROVISIONING || anchor.RemovalIntent.ConfirmedAt != nil {
 		t.Fatalf("only tracked deprovisioning may delete, removals %v, updates %v", f.removed, f.updated)
 	}
 	if err := wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 20*time.Second, true, func(ctx context.Context) (bool, error) {
@@ -182,12 +190,88 @@ func TestLiveVolumeRetention(t *testing.T) {
 	}
 	delete(claims, "anchor")
 	retained()
+	f.reconciler = newTestReconciler(Config{
+		Agents: f.reconciler.agents, Runners: f.reconciler.runners, RunnerDialer: f.reconciler.runnerDialer,
+	})
 	reconcile()
-	if anchor.GetStatus() != runnersv1.VolumeStatus_VOLUME_STATUS_DELETED || anchor.GetRemovedAt() == nil || len(f.removed) != 1 {
-		t.Fatal("record must close only after the native inventory reports physical absence")
+	if anchor.GetStatus() != runnersv1.VolumeStatus_VOLUME_STATUS_DELETED || anchor.GetRemovalIntent().GetConfirmedAt() == nil ||
+		len(f.removed) != 2 || len(f.updated) != 3 || f.updated[2].GetConfirmRemoval().GetIntentId() != originalIntent.Id ||
+		!proto.Equal(anchor.RemovalIntent.Expected, originalIntent.Expected) {
+		t.Fatal("restarted controller must confirm the original intent only after checked native absence")
 	}
 	retained()
-	t.Logf("native RemoveVolume deleted only the tracked empty claim; %d other PVCs retained unchanged", len(claims))
+	t.Logf("native checked removal deleted only the tracked empty claim; restarted controller confirmed the original intent; %d other PVCs retained unchanged", len(claims))
+	verifyLiveSandboxVolumeCleanup(t, ctx, live, native)
+	retained()
+}
+
+func verifyLiveSandboxVolumeCleanup(t *testing.T, ctx context.Context, live *retentionLiveNamespace, native runnerv1.RunnerServiceClient) {
+	t.Helper()
+	sandboxID := uuid.NewString()
+	sandbox := &agentsv1.Sandbox{
+		Meta: &agentsv1.EntityMeta{Id: sandboxID}, OrganizationId: testOrganizationID, OwnerId: "fixture-sandbox-user",
+		Status: agentsv1.SandboxStatus_SANDBOX_STATUS_TERMINATED,
+	}
+	v := checkedTestSandboxVolume("sandbox-volume", sandboxID, runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING)
+	claim := live.createClaimForVolume(t, ctx, "pvc-sandbox-workspace", v)
+	deleted := 0
+	agents := &testutil.FakeAgentsClient{
+		GetSandboxFunc: func(_ context.Context, req *agentsv1.GetSandboxRequest, _ ...grpc.CallOption) (*agentsv1.GetSandboxResponse, error) {
+			if req.GetId() != sandboxID {
+				t.Fatal("sandbox binding queried the wrong owner")
+			}
+			return &agentsv1.GetSandboxResponse{Sandbox: sandbox}, nil
+		},
+		DeleteSandboxFunc: func(_ context.Context, req *agentsv1.DeleteSandboxRequest, _ ...grpc.CallOption) (*agentsv1.DeleteSandboxResponse, error) {
+			if req.Id != sandboxID || v.RemovalIntent.GetConfirmedAt() == nil {
+				t.Fatal("sandbox finalized without volume confirmation")
+			}
+			deleted++
+			return &agentsv1.DeleteSandboxResponse{}, nil
+		},
+	}
+	registry := &fakeRunnersClient{
+		listVolumes: func(context.Context, *runnersv1.ListVolumesRequest, ...grpc.CallOption) (*runnersv1.ListVolumesResponse, error) {
+			return &runnersv1.ListVolumesResponse{Volumes: []*runnersv1.Volume{proto.Clone(v).(*runnersv1.Volume)}}, nil
+		},
+		listWorkloads: func(context.Context, *runnersv1.ListWorkloadsRequest, ...grpc.CallOption) (*runnersv1.ListWorkloadsResponse, error) {
+			return &runnersv1.ListWorkloadsResponse{}, nil
+		},
+		updateVolumeChecked: func(_ context.Context, req *runnersv1.UpdateVolumeCheckedRequest, _ ...grpc.CallOption) (*runnersv1.UpdateVolumeCheckedResponse, error) {
+			return checkedTestUpdate(t, v, req), nil
+		},
+	}
+	dialer := &fakeRunnerDialer{dial: func(_ context.Context, id string) (runnerv1.RunnerServiceClient, error) {
+		if id != v.RunnerId {
+			t.Fatal("sandbox cleanup changed runner")
+		}
+		return native, nil
+	}}
+	first := &Reconciler{agents: agents, runners: registry, runnerDialer: dialer}
+	if err := first.reconcileSandbox(ctx, sandbox, time.Now()); err == nil || deleted != 0 || v.Status != runnersv1.VolumeStatus_VOLUME_STATUS_DEPROVISIONING || v.RemovalIntent.GetConfirmedAt() != nil {
+		t.Fatalf("native sandbox deletion must remain pending: err=%v deleted=%d", err, deleted)
+	}
+	intent := proto.Clone(v.RemovalIntent).(*runnersv1.VolumeRemovalIntent)
+	if intent.Expected.InstanceUid != string(claim.UID) || intent.Expected.InstanceId != claim.Name {
+		t.Fatal("sandbox intent did not pin the observed native UID/name")
+	}
+	if err := wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 20*time.Second, true, func(ctx context.Context) (bool, error) {
+		current, err := live.kube.CoreV1().PersistentVolumeClaims(live.namespace).Get(ctx, claim.Name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		if err == nil && current.UID != claim.UID {
+			return false, fmt.Errorf("sandbox claim replaced")
+		}
+		return false, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &Reconciler{agents: agents, runners: registry, runnerDialer: dialer}
+	if err := restarted.reconcileSandbox(ctx, sandbox, time.Now()); err != nil || deleted != 1 || v.RemovalIntent.GetConfirmedAt() == nil || v.RemovalIntent.Id != intent.Id || !proto.Equal(v.RemovalIntent.Expected, intent.Expected) {
+		t.Fatalf("sandbox finalization did not resume the stored intent: err=%v deleted=%d", err, deleted)
+	}
+	t.Log("native sandbox workspace bound from inventory with user ownership checked; pending cleanup resumed with original UID before sandbox finalization")
 }
 
 type retentionLiveNamespace struct {
@@ -356,9 +440,16 @@ func newRetentionLiveNamespace(t *testing.T, ctx context.Context, kubeconfig str
 
 func (f *retentionLiveNamespace) createClaim(t *testing.T, ctx context.Context, name, key string) *corev1.PersistentVolumeClaim {
 	t.Helper()
+	return f.createClaimForVolume(t, ctx, name, checkedTestVolume(key, runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING))
+}
+
+func (f *retentionLiveNamespace) createClaimForVolume(t *testing.T, ctx context.Context, name string, volume *runnersv1.Volume) *corev1.PersistentVolumeClaim {
+	t.Helper()
 	storageClass := "unprovisioned-" + f.runID
 	f.owned[retentionResource("", "persistentvolumeclaims")][name] = ""
-	claim, err := f.kube.CoreV1().PersistentVolumeClaims(f.namespace).Create(ctx, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{retentionOwnerLabel: f.runID, "app.kubernetes.io/managed-by": "k8s-runner", "volume_key": key}}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &storageClass, AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Mi")}}}}, metav1.CreateOptions{})
+	labels := checkedTestInstance(volume, name, "unused").IdentityLabels
+	labels[retentionOwnerLabel] = f.runID
+	claim, err := f.kube.CoreV1().PersistentVolumeClaims(f.namespace).Create(ctx, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &storageClass, AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Mi")}}}}, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

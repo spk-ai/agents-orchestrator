@@ -1,5 +1,5 @@
 // This model-free fixture must be built inside a reviewed k8s-runner checkout.
-// It exposes that checkout's real ListVolumes and RemoveVolume over loopback.
+// It exposes that checkout's real ListVolumes and RemoveVolumeChecked over loopback.
 package main
 
 import (
@@ -77,9 +77,12 @@ func run() error {
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		switch info.FullMethod {
 		case runnerv1.RunnerService_ListVolumes_FullMethodName:
-		case runnerv1.RunnerService_RemoveVolume_FullMethodName:
-			name := req.(*runnerv1.RemoveVolumeRequest).GetVolumeName()
+		case runnerv1.RunnerService_RemoveVolumeChecked_FullMethodName:
+			name := req.(*runnerv1.RemoveVolumeCheckedRequest).GetExpected().GetInstanceId()
 			claim, err := kube.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metav1.GetOptions{})
+			if apierrors.IsNotFound(err) {
+				break
+			}
 			if err != nil || claim.Labels["agyn.io/volume-retention-test"] != runID || claim.Spec.VolumeName != "" || claim.Spec.StorageClassName == nil || *claim.Spec.StorageClassName != "unprovisioned-"+runID {
 				return nil, status.Error(codes.FailedPrecondition, "only this fixture's empty claims may be removed")
 			}

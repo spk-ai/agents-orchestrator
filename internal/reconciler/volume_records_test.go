@@ -55,29 +55,23 @@ func TestCreateVolumeRecordsReusesExistingActiveRecord(t *testing.T) {
 	organizationID := uuid.NewString()
 	volumeID := uuid.NewString()
 	var updateCount int
+	stored := checkedTestVolume(recordID, runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE)
+	stored.ThreadId, stored.AgentId, stored.OwnerId = agentInstanceID.String(), agentID.String(), agentInstanceID.String()
+	stored.RunnerId, stored.OrganizationId, stored.VolumeId = runnerID, organizationID, volumeID
+	stored.BoundInstance = checkedTestInstance(stored, stored.GetInstanceId(), "existing-uid")
 	runners := &fakeRunnersClient{
-		createVolume: func(context.Context, *runnersv1.CreateVolumeRequest, ...grpc.CallOption) (*runnersv1.CreateVolumeResponse, error) {
+		createVolumeChecked: func(context.Context, *runnersv1.CreateVolumeCheckedRequest, ...grpc.CallOption) (*runnersv1.CreateVolumeCheckedResponse, error) {
 			return nil, status.Error(codes.AlreadyExists, "volume exists")
 		},
 		getVolume: func(_ context.Context, req *runnersv1.GetVolumeRequest, _ ...grpc.CallOption) (*runnersv1.GetVolumeResponse, error) {
 			if req.GetId() != recordID {
 				return nil, errNotImplemented
 			}
-			return &runnersv1.GetVolumeResponse{Volume: &runnersv1.Volume{
-				Meta:           &runnersv1.EntityMeta{Id: recordID},
-				ThreadId:       agentInstanceID.String(),
-				AgentId:        agentID.String(),
-				RunnerId:       runnerID,
-				VolumeId:       volumeID,
-				OrganizationId: organizationID,
-				Status:         runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE,
-				OwnerKind:      runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE,
-				OwnerId:        agentInstanceID.String(),
-			}}, nil
+			return &runnersv1.GetVolumeResponse{Volume: stored}, nil
 		},
-		updateVolume: func(context.Context, *runnersv1.UpdateVolumeRequest, ...grpc.CallOption) (*runnersv1.UpdateVolumeResponse, error) {
+		updateVolumeChecked: func(context.Context, *runnersv1.UpdateVolumeCheckedRequest, ...grpc.CallOption) (*runnersv1.UpdateVolumeCheckedResponse, error) {
 			updateCount++
-			return &runnersv1.UpdateVolumeResponse{}, nil
+			return &runnersv1.UpdateVolumeCheckedResponse{}, nil
 		},
 	}
 	reconciler := &Reconciler{runners: runners}
@@ -106,12 +100,14 @@ func TestCreateVolumeRecordsUsesSingleProvisioningRecordAcrossReruns(t *testing.
 	var createIDs []string
 	var updateCount int
 	runners := &fakeRunnersClient{
-		createVolume: func(_ context.Context, req *runnersv1.CreateVolumeRequest, _ ...grpc.CallOption) (*runnersv1.CreateVolumeResponse, error) {
+		createVolumeChecked: func(_ context.Context, checked *runnersv1.CreateVolumeCheckedRequest, _ ...grpc.CallOption) (*runnersv1.CreateVolumeCheckedResponse, error) {
+			req := checked.GetVolume()
 			createIDs = append(createIDs, req.GetId())
 			if _, ok := storedVolumes[req.GetId()]; ok {
 				return nil, status.Error(codes.AlreadyExists, "volume exists")
 			}
 			storedVolumes[req.GetId()] = &runnersv1.Volume{
+				CheckedLifecycle: true, LifecycleRevision: 1, SizeGb: req.GetSizeGb(),
 				Meta:           &runnersv1.EntityMeta{Id: req.GetId()},
 				ThreadId:       req.GetThreadId(),
 				AgentId:        req.GetAgentId(),
@@ -122,7 +118,7 @@ func TestCreateVolumeRecordsUsesSingleProvisioningRecordAcrossReruns(t *testing.
 				OwnerKind:      req.GetOwnerKind(),
 				OwnerId:        req.GetOwnerId(),
 			}
-			return &runnersv1.CreateVolumeResponse{}, nil
+			return &runnersv1.CreateVolumeCheckedResponse{Volume: storedVolumes[req.GetId()]}, nil
 		},
 		getVolume: func(_ context.Context, req *runnersv1.GetVolumeRequest, _ ...grpc.CallOption) (*runnersv1.GetVolumeResponse, error) {
 			volume, ok := storedVolumes[req.GetId()]
@@ -131,9 +127,9 @@ func TestCreateVolumeRecordsUsesSingleProvisioningRecordAcrossReruns(t *testing.
 			}
 			return &runnersv1.GetVolumeResponse{Volume: volume}, nil
 		},
-		updateVolume: func(context.Context, *runnersv1.UpdateVolumeRequest, ...grpc.CallOption) (*runnersv1.UpdateVolumeResponse, error) {
+		updateVolumeChecked: func(context.Context, *runnersv1.UpdateVolumeCheckedRequest, ...grpc.CallOption) (*runnersv1.UpdateVolumeCheckedResponse, error) {
 			updateCount++
-			return &runnersv1.UpdateVolumeResponse{}, nil
+			return &runnersv1.UpdateVolumeCheckedResponse{}, nil
 		},
 	}
 	reconciler := &Reconciler{runners: runners}
@@ -176,7 +172,7 @@ func TestCreateVolumeRecordsDoesNotReactivateFailedRecord(t *testing.T) {
 	volumeID := uuid.NewString()
 	var updateCount int
 	runners := &fakeRunnersClient{
-		createVolume: func(context.Context, *runnersv1.CreateVolumeRequest, ...grpc.CallOption) (*runnersv1.CreateVolumeResponse, error) {
+		createVolumeChecked: func(context.Context, *runnersv1.CreateVolumeCheckedRequest, ...grpc.CallOption) (*runnersv1.CreateVolumeCheckedResponse, error) {
 			return nil, status.Error(codes.AlreadyExists, "volume exists")
 		},
 		getVolume: func(context.Context, *runnersv1.GetVolumeRequest, ...grpc.CallOption) (*runnersv1.GetVolumeResponse, error) {
@@ -192,9 +188,9 @@ func TestCreateVolumeRecordsDoesNotReactivateFailedRecord(t *testing.T) {
 				OwnerId:        agentInstanceID.String(),
 			}}, nil
 		},
-		updateVolume: func(context.Context, *runnersv1.UpdateVolumeRequest, ...grpc.CallOption) (*runnersv1.UpdateVolumeResponse, error) {
+		updateVolumeChecked: func(context.Context, *runnersv1.UpdateVolumeCheckedRequest, ...grpc.CallOption) (*runnersv1.UpdateVolumeCheckedResponse, error) {
 			updateCount++
-			return &runnersv1.UpdateVolumeResponse{}, nil
+			return &runnersv1.UpdateVolumeCheckedResponse{}, nil
 		},
 	}
 	reconciler := &Reconciler{runners: runners}
@@ -216,12 +212,12 @@ func TestCreateVolumeRecordsDoesNotFailRecordOnCreateError(t *testing.T) {
 	volumeID := uuid.NewString()
 	var updateCount int
 	runners := &fakeRunnersClient{
-		createVolume: func(context.Context, *runnersv1.CreateVolumeRequest, ...grpc.CallOption) (*runnersv1.CreateVolumeResponse, error) {
+		createVolumeChecked: func(context.Context, *runnersv1.CreateVolumeCheckedRequest, ...grpc.CallOption) (*runnersv1.CreateVolumeCheckedResponse, error) {
 			return nil, errors.New("runtime unavailable")
 		},
-		updateVolume: func(context.Context, *runnersv1.UpdateVolumeRequest, ...grpc.CallOption) (*runnersv1.UpdateVolumeResponse, error) {
+		updateVolumeChecked: func(context.Context, *runnersv1.UpdateVolumeCheckedRequest, ...grpc.CallOption) (*runnersv1.UpdateVolumeCheckedResponse, error) {
 			updateCount++
-			return &runnersv1.UpdateVolumeResponse{}, nil
+			return &runnersv1.UpdateVolumeCheckedResponse{}, nil
 		},
 	}
 	reconciler := &Reconciler{runners: runners}
@@ -273,7 +269,7 @@ func TestPrepareExistingVolumeRecordRejectsFailedRecord(t *testing.T) {
 		OwnerId:        agentInstanceID,
 	}
 
-	if err := reconciler.prepareExistingVolumeRecord(ctx, req); err == nil {
+	if _, err := reconciler.prepareExistingVolumeRecord(ctx, req); err == nil {
 		t.Fatal("expected failed existing record to remain terminal")
 	}
 }
@@ -309,7 +305,7 @@ func TestPrepareExistingVolumeRecordRejectsConflictingRecord(t *testing.T) {
 		OwnerId:        agentInstanceID,
 	}
 
-	if err := reconciler.prepareExistingVolumeRecord(ctx, req); err == nil {
+	if _, err := reconciler.prepareExistingVolumeRecord(ctx, req); err == nil {
 		t.Fatal("expected conflicting existing record to fail")
 	}
 }

@@ -1927,6 +1927,8 @@ func (f *fakeRunnerDialer) Dial(ctx context.Context, runnerID string) (runnerv1.
 func (f *fakeRunnerDialer) Close() {}
 
 type fakeRunnersClient struct {
+	createVolumeChecked          func(context.Context, *runnersv1.CreateVolumeCheckedRequest, ...grpc.CallOption) (*runnersv1.CreateVolumeCheckedResponse, error)
+	updateVolumeChecked          func(context.Context, *runnersv1.UpdateVolumeCheckedRequest, ...grpc.CallOption) (*runnersv1.UpdateVolumeCheckedResponse, error)
 	createWorkload               func(context.Context, *runnersv1.CreateWorkloadRequest, ...grpc.CallOption) (*runnersv1.CreateWorkloadResponse, error)
 	createVolume                 func(context.Context, *runnersv1.CreateVolumeRequest, ...grpc.CallOption) (*runnersv1.CreateVolumeResponse, error)
 	listFlavors                  func(context.Context, *runnersv1.ListFlavorsRequest, ...grpc.CallOption) (*runnersv1.ListFlavorsResponse, error)
@@ -1946,6 +1948,20 @@ type fakeRunnersClient struct {
 	streamWorkloadLogs           func(context.Context, *runnerv1.StreamWorkloadLogsRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[runnerv1.StreamWorkloadLogsResponse], error)
 	listWorkloadsByAgentInstance func(context.Context, *runnersv1.ListWorkloadsByAgentInstanceRequest, ...grpc.CallOption) (*runnersv1.ListWorkloadsByAgentInstanceResponse, error)
 	listVolumesByAgentInstance   func(context.Context, *runnersv1.ListVolumesByAgentInstanceRequest, ...grpc.CallOption) (*runnersv1.ListVolumesByAgentInstanceResponse, error)
+}
+
+func (f *fakeRunnersClient) CreateVolumeChecked(ctx context.Context, req *runnersv1.CreateVolumeCheckedRequest, opts ...grpc.CallOption) (*runnersv1.CreateVolumeCheckedResponse, error) {
+	if f.createVolumeChecked != nil {
+		return f.createVolumeChecked(ctx, req, opts...)
+	}
+	return nil, errNotImplemented
+}
+
+func (f *fakeRunnersClient) UpdateVolumeChecked(ctx context.Context, req *runnersv1.UpdateVolumeCheckedRequest, opts ...grpc.CallOption) (*runnersv1.UpdateVolumeCheckedResponse, error) {
+	if f.updateVolumeChecked != nil {
+		return f.updateVolumeChecked(ctx, req, opts...)
+	}
+	return nil, errNotImplemented
 }
 
 func (f *fakeRunnersClient) RegisterRunner(context.Context, *runnersv1.RegisterRunnerRequest, ...grpc.CallOption) (*runnersv1.RegisterRunnerResponse, error) {
@@ -2136,6 +2152,7 @@ func (f *fakeRunnersClient) StreamWorkloadLogs(ctx context.Context, req *runnerv
 }
 
 type fakeRunnerClient struct {
+	removeVolumeChecked   func(context.Context, *runnerv1.RemoveVolumeCheckedRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error)
 	startWorkload         func(context.Context, *runnerv1.StartWorkloadRequest, ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error)
 	stopWorkload          func(context.Context, *runnerv1.StopWorkloadRequest, ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error)
 	listWorkloads         func(context.Context, *runnerv1.ListWorkloadsRequest, ...grpc.CallOption) (*runnerv1.ListWorkloadsResponse, error)
@@ -2143,6 +2160,13 @@ type fakeRunnerClient struct {
 	removeVolume          func(context.Context, *runnerv1.RemoveVolumeRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeResponse, error)
 	inspectWorkload       func(context.Context, *runnerv1.InspectWorkloadRequest, ...grpc.CallOption) (*runnerv1.InspectWorkloadResponse, error)
 	findWorkloadsByLabels func(context.Context, *runnerv1.FindWorkloadsByLabelsRequest, ...grpc.CallOption) (*runnerv1.FindWorkloadsByLabelsResponse, error)
+}
+
+func (f *fakeRunnerClient) RemoveVolumeChecked(ctx context.Context, req *runnerv1.RemoveVolumeCheckedRequest, opts ...grpc.CallOption) (*runnerv1.RemoveVolumeCheckedResponse, error) {
+	if f.removeVolumeChecked != nil {
+		return f.removeVolumeChecked(ctx, req, opts...)
+	}
+	return nil, errNotImplemented
 }
 
 func (f *fakeRunnerClient) Ready(context.Context, *runnerv1.ReadyRequest, ...grpc.CallOption) (*runnerv1.ReadyResponse, error) {
