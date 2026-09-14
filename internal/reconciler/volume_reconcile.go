@@ -72,7 +72,7 @@ func (r *Reconciler) reconcileVolumes(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	tracked, ignoredVolumeKeysByRunner, err := r.listActiveVolumes(ctx, organizations)
+	tracked, err := r.listActiveVolumes(ctx, organizations)
 	if err != nil {
 		return err
 	}
@@ -181,24 +181,10 @@ func (r *Reconciler) reconcileVolumes(ctx context.Context) error {
 			log.Printf("reconciler: warn: list volumes for runner %s: %v", runnerID, err)
 			continue
 		}
-		runnerVolumes := make(map[string]*runnerv1.VolumeListItem)
-		for _, item := range resp.GetVolumes() {
-			if item == nil {
-				continue
-			}
-			volumeKey := item.GetVolumeKey()
-			if volumeKey == "" {
-				log.Printf("reconciler: warn: runner %s volume missing volume_key", runnerID)
-				continue
-			}
-			if _, ok := runnerVolumes[volumeKey]; ok {
-				log.Printf("reconciler: warn: runner %s volume_key %s duplicated", runnerID, volumeKey)
-				continue
-			}
-			runnerVolumes[volumeKey] = item
-		}
-		for volumeID := range ignoredVolumeKeysByRunner[runnerID] {
-			delete(runnerVolumes, volumeID)
+		runnerVolumes, err := indexRunnerVolumes(resp)
+		if err != nil {
+			log.Printf("reconciler: warn: runner %s invalid volume inventory; retaining records and disks: %v", runnerID, err)
+			continue
 		}
 
 		for volumeID, volume := range trackedVolumes {
@@ -227,24 +213,50 @@ func (r *Reconciler) reconcileVolumes(ctx context.Context) error {
 		}
 
 		for _, item := range runnerVolumes {
-			instanceID := item.GetInstanceId()
-			if instanceID == "" {
-				log.Printf("reconciler: warn: runner %s orphan volume missing instance id", runnerID)
-				continue
-			}
-			if err := r.removeRunnerVolume(ctx, runnerClient, instanceID); err != nil {
-				log.Printf("reconciler: warn: remove orphan volume %s on runner %s: %v", instanceID, runnerID, err)
-			}
+			// The registry scan is filtered and precedes this runner scan. An
+			// unmatched disk can belong to another organization or a newer record.
+			log.Printf("reconciler: warn: runner %s retaining untracked volume %q (volume_key %q); ownership reconciliation required", runnerID, item.GetInstanceId(), item.GetVolumeKey())
 		}
 	}
 	return nil
 }
 
-func (r *Reconciler) listActiveVolumes(ctx context.Context, organizations map[string]struct{}) ([]*runnersv1.Volume, map[string]map[string]struct{}, error) {
+// Validate the whole inventory before using absence or selecting a disk for a
+// record. Skipping malformed entries or choosing the first duplicate could
+// close a live record, adopt a different disk, or delete another owner's data.
+func indexRunnerVolumes(resp *runnerv1.ListVolumesResponse) (map[string]*runnerv1.VolumeListItem, error) {
+	if resp == nil {
+		return nil, fmt.Errorf("response is nil")
+	}
+	byKey := make(map[string]*runnerv1.VolumeListItem, len(resp.GetVolumes()))
+	byInstance := make(map[string]struct{}, len(resp.GetVolumes()))
+	for i, item := range resp.GetVolumes() {
+		if item == nil {
+			return nil, fmt.Errorf("volume %d is nil", i)
+		}
+		key, instanceID := item.GetVolumeKey(), item.GetInstanceId()
+		if key == "" || strings.TrimSpace(key) != key {
+			return nil, fmt.Errorf("volume %d has an empty or whitespace-padded volume_key", i)
+		}
+		if instanceID == "" || strings.TrimSpace(instanceID) != instanceID {
+			return nil, fmt.Errorf("volume %d has an empty or whitespace-padded instance_id", i)
+		}
+		if _, exists := byKey[key]; exists {
+			return nil, fmt.Errorf("volume_key %q is duplicated", key)
+		}
+		if _, exists := byInstance[instanceID]; exists {
+			return nil, fmt.Errorf("instance_id %q is duplicated", instanceID)
+		}
+		byKey[key] = item
+		byInstance[instanceID] = struct{}{}
+	}
+	return byKey, nil
+}
+
+func (r *Reconciler) listActiveVolumes(ctx context.Context, organizations map[string]struct{}) ([]*runnersv1.Volume, error) {
 	active := []*runnersv1.Volume{}
-	ignoredVolumeKeysByRunner := map[string]map[string]struct{}{}
 	if len(organizations) == 0 {
-		return active, ignoredVolumeKeysByRunner, nil
+		return active, nil
 	}
 	pageToken := ""
 	statuses := []runnersv1.VolumeStatus{
@@ -261,26 +273,26 @@ func (r *Reconciler) listActiveVolumes(ctx context.Context, organizations map[st
 			},
 		})
 		if err != nil {
-			return nil, nil, fmt.Errorf("list volumes: %w", err)
+			return nil, fmt.Errorf("list volumes: %w", err)
 		}
 		for _, volume := range resp.GetVolumes() {
 			if volume == nil {
-				return nil, nil, fmt.Errorf("volume is nil")
+				return nil, fmt.Errorf("volume is nil")
 			}
 			meta := volume.GetMeta()
 			if meta == nil {
-				return nil, nil, fmt.Errorf("volume meta missing")
+				return nil, fmt.Errorf("volume meta missing")
 			}
 			if meta.GetId() == "" {
-				return nil, nil, fmt.Errorf("volume meta id missing")
+				return nil, fmt.Errorf("volume meta id missing")
 			}
 			orgID := strings.TrimSpace(volume.GetOrganizationId())
 			if orgID == "" {
-				return nil, nil, fmt.Errorf("volume %s organization id missing", meta.GetId())
+				return nil, fmt.Errorf("volume %s organization id missing", meta.GetId())
 			}
 			parsedOrgID, err := uuidutil.ParseUUID(orgID, "volume.organization_id")
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 			if _, ok := organizations[parsedOrgID.String()]; !ok {
 				continue
@@ -292,7 +304,7 @@ func (r *Reconciler) listActiveVolumes(ctx context.Context, organizations map[st
 			break
 		}
 	}
-	return active, ignoredVolumeKeysByRunner, nil
+	return active, nil
 }
 
 // closeMissingVolume finalizes a record whose disk the runner authoritatively
