@@ -275,11 +275,12 @@ func verifyLiveSandboxVolumeCleanup(t *testing.T, ctx context.Context, live *ret
 }
 
 type retentionLiveNamespace struct {
-	kube      kubernetes.Interface
-	namespace string
-	uid       types.UID
-	runID     string
-	owned     map[schema.GroupVersionResource]map[string]types.UID
+	kube          kubernetes.Interface
+	namespace     string
+	uid           types.UID
+	runID         string
+	owned         map[schema.GroupVersionResource]map[string]types.UID
+	runnerAddress string
 }
 
 func retentionResource(group, name string) schema.GroupVersionResource {
@@ -509,6 +510,7 @@ func startRetentionNativeRunner(t *testing.T, ctx context.Context, binary, kubec
 	if err != nil || host != "127.0.0.1" || ready.Namespace != live.namespace || ready.UID != string(live.uid) {
 		t.Fatal("native fixture receipt does not match this disposable namespace")
 	}
+	live.runnerAddress = ready.Address
 	conn, err := grpc.NewClient(ready.Address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatal(err)
