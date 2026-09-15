@@ -10,8 +10,8 @@ proposal. Verification of the new combination is recorded in
 [RESOURCE-ANCHORS.md](RESOURCE-ANCHORS.md).
 
 Historical verification of `b3ec0e2`: build and vet excluding the known `assign`
-failure pass. The selected full race
-suite passes 666 entries with five gated skips and exactly the known
+failure pass. The selected full race suite passes 666 entries with five gated
+skips and exactly the known
 group-consumer test excluded. A real PostgreSQL/Kubernetes/process subset passes
 four recovery scenarios plus both owner groups and parent (seven entries), with
 no failures/skips: lost preparation across replacement of all three application
@@ -26,14 +26,14 @@ the newer API/native/registry revisions in that report, including registry
 migrations through `0024`; the old reproduction combination below is not a
 substitute for those dependencies.
 
-## Focused Proposal
+## Historical Recovery Proposal
 
 Dependent preparation-recovery follow-up on `754e935`, requiring the prepared
 registry (`spk-ai/runners` `e7c42f4`, unchanged) and the API/native runner proposals
 `feat/prepared-outcome-observation`. This is a source proposal, not a published
-API, compatible stock image or production deployment. This focused branch does
-not include the separately reviewed workload DNS correction; an installed
-prepared/DNS stack must not be replaced with this branch alone.
+API, compatible stock image or production deployment. The original focused
+recovery branch does not include the separately reviewed workload DNS correction;
+an installed prepared/DNS stack must not be replaced with that branch alone.
 
 ## Lifecycle
 

@@ -1,5 +1,9 @@
 # Group Consumer Test Synchronization
 
+This lab branch includes the focused fix `fdf60f9` as `ce2049c`. The evidence
+below is for the independent upstream-based patch; the combined branch's
+checks are recorded separately in [RESOURCE-ANCHORS.md](RESOURCE-ANCHORS.md).
+
 Focused test-only correction on upstream `ae7d0bf`. No production consumer,
 retry policy, API, generated code, workload or deployment behavior changes.
 

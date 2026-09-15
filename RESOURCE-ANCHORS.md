@@ -1,10 +1,31 @@
 # Resource Anchor Controllers
 
+## Lab Combination
+
+This `lab/resource-anchors-native-dns` branch combines focused controller
+`2fddf9c` (cherry-picked as `48de4fc`) with prepared/DNS recovery base `b3ec0e2`.
+Unlike the focused proposal, this combination retains the installed DNS
+correction. It is not an installed image or a bundled upstream proposal.
+
+The combined source also includes test-only `fdf60f9` (cherry-picked as
+`ce2049c`), removing the group-consumer race exclusion. It passes 765 ordinary
+and 765 full race entries, with five gated skips and no test exclusion.
+Build and `go vet -assign=false ./...` pass. The combined Kubernetes/process
+subset passes all four scenarios plus two owner groups and parent (seven
+entries), with no failures/skips: parallel durable follow-up and lost preparation
+across replacement of all three application processes, for each owner kind.
+The final preservation snapshot matches all 105 PVCs, 52 deployments and cluster
+RBAC, with zero installed task Pods. This verifies source compatibility, not a
+new live DNS interception test, real-agent A2A rollout or production readiness.
+
+## Focused Contribution
+
 Dependent controller contribution on preparation-recovery base `c2bb0e5`.
 Requires API `6fe4cab`, native k8s-runner `72a1cc8`, and Runners `e1a3b7f`
-including migrations `0023` and `0024`. It is not installed. This branch does
-not include the separately reviewed DNS correction and must not replace the
-installed prepared/DNS combination by itself.
+including migrations `0023` and `0024`. It is not installed. The focused
+`feat/resource-anchor-controllers` branch does not include the separately
+reviewed DNS correction and must not replace the installed prepared/DNS
+combination by itself.
 
 ## Execution Contract
 
@@ -73,8 +94,8 @@ same skips, excluding exactly the pre-existing
 `TestGroupMembershipConsumerLoopRetriesWithoutBlocking` race. Build and
 `go vet -assign=false ./...` pass; unfiltered vet retains the existing
 `start_decision.go` self-assignment. Do not describe either excluded check as
-passing. A prior focused 20-run anchor race suite passed 1,780 entries before
-the additional cancellation-boundary tests were added.
+passing. The final focused 20-run anchor race suite passes 1,920 entries,
+including the additional cancellation-boundary tests, with no failures/skips.
 
 Regression coverage includes both owner kinds, native request projection,
 distinct APIs without fallback, immutable anchors and both revisions, volume
@@ -89,6 +110,16 @@ while preserving the volume owner. It also adds cancellation before preparation
 authority and SIGKILL at anchor-removal PENDING/ABSENT. Run this fixture with
 the exact dependent source revisions above; source tests alone are not its
 acceptance evidence.
+
+The final race-enabled run of the focused contribution on 2026-09-15 passes all
+38 scenarios plus the two owner groups and parent (41 entries), with no failures
+or skips. Actual inbox-thread IDs differ from legacy registry instance aliases.
+Application-process replacement and exact native ownership/cleanup are verified;
+the database is not crashed. Fixture cleanup completes and the independent
+installed-state comparison retains all 105 PVCs and 52 deployment snapshots with
+zero task Pods. Authorization and Agents display metadata remain fixtures, and
+the probe is credential-free Node, not a native agent or A2A client. The separate
+passing lab subset above verifies this combination's compatibility.
 
 ## Remaining Release Work
 
