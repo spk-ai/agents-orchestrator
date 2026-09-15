@@ -63,7 +63,14 @@ the shared 12-minute owner-group deadline during the last sandbox cleanup.
 That run failed; its owned fixtures were removed and installed snapshots match.
 The expanded nineteen-scenario group now has a 15-minute aggregate budget,
 without changing each controller child's independent 120-second deadline or any
-assertion. The complete regression rerun is pending.
+assertion. The complete rerun finished at 09:48 UTC with all 38 scenarios, two
+owner groups and parent passing (41 entries), with no failures or skips. This
+checks the existing execution/removal paths on source `b08d43b`; the failed first
+attempt remains failed evidence, not a passing subset.
+
+After fixture cleanup, an independent snapshot again matched all 108 installed
+PVCs, 52 deployment specifications/readiness values, ten namespaces, 96
+ClusterRoles and 76 ClusterRoleBindings. No installed task Pods remained.
 
 ## Remaining Gates
 
