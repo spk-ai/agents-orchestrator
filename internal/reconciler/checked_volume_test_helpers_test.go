@@ -5,6 +5,7 @@ import (
 
 	runnerv1 "github.com/agynio/agents-orchestrator/.gen/go/agynio/api/runner/v1"
 	runnersv1 "github.com/agynio/agents-orchestrator/.gen/go/agynio/api/runners/v1"
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -102,6 +103,24 @@ func checkedTestUpdate(t *testing.T, v *runnersv1.Volume, req *runnersv1.UpdateV
 		}
 		next.Status = runnersv1.VolumeStatus_VOLUME_STATUS_DELETED
 		next.RemovalIntent.ConfirmedAt = timestamppb.Now()
+	case *runnersv1.UpdateVolumeCheckedRequest_BeginAnchoredRemoval:
+		if next.ResourceAnchor == nil || next.BoundInstance == nil {
+			t.Fatal("unbound anchored retirement")
+		}
+		if next.RemovalIntent == nil {
+			next.RemovalIntent = &runnersv1.VolumeRemovalIntent{Id: uuid.NewString(), Anchored: true,
+				Expected: proto.Clone(next.BoundInstance).(*runnerv1.VolumeListItem), RequestedAt: timestamppb.Now()}
+		}
+		next.Status = runnersv1.VolumeStatus_VOLUME_STATUS_DEPROVISIONING
+	case *runnersv1.UpdateVolumeCheckedRequest_ConfirmAnchoredRemoval:
+		if !next.RemovalIntent.GetAnchored() || next.RemovalIntent.GetId() != op.ConfirmAnchoredRemoval.GetIntentId() {
+			t.Fatal("wrong anchored retirement intent")
+		}
+		next.Status = runnersv1.VolumeStatus_VOLUME_STATUS_DELETED
+		if next.RemovalIntent.ConfirmedAt == nil {
+			next.RemovalIntent.ConfirmedAt = timestamppb.Now()
+		}
+		next.AnchoredRemovalObservation = proto.Clone(op.ConfirmAnchoredRemoval.Observation).(*runnerv1.RemoveVolumeAnchoredResponse)
 	case *runnersv1.UpdateVolumeCheckedRequest_FailProvisioning:
 		next.Status = runnersv1.VolumeStatus_VOLUME_STATUS_FAILED
 		next.RemovedAt = timestamppb.Now()

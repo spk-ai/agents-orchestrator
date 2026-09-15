@@ -6,6 +6,10 @@ including migrations `0023` and `0024`. It is not installed. This branch does
 not include the separately reviewed DNS correction and must not replace the
 installed prepared/DNS combination by itself.
 
+The dependent [anchored retirement proposal](ANCHORED-VOLUME-RETIREMENT.md)
+adds migration `0025` and explicit PVC-and-owner removal to that baseline.
+Historical anchor verification below retains its original scope.
+
 ## Execution Contract
 
 Both agent and sandbox starts share the same anchored implementation:

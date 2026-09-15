@@ -133,6 +133,7 @@ func run() error {
 		case runnerv1.RunnerService_ListVolumes_FullMethodName,
 			runnerv1.RunnerService_ReserveResourceAnchor_FullMethodName,
 			runnerv1.RunnerService_RemoveWorkloadAnchor_FullMethodName,
+			runnerv1.RunnerService_RemoveVolumeAnchored_FullMethodName,
 			runnerv1.RunnerService_ObserveWorkloadPreparation_FullMethodName,
 			runnerv1.RunnerService_InspectPreparedWorkload_FullMethodName,
 			runnerv1.RunnerService_ActivateWorkload_FullMethodName,

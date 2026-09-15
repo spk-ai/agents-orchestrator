@@ -42,6 +42,7 @@ type preparedControllerResult struct {
 	Operations []checkedControllerOperation
 	Workload   *runnersv1.Workload
 	Binding    *runnerv1.WorkloadBinding
+	Volume     *runnersv1.Volume
 	Error      bool
 	ErrorCode  string
 }
@@ -134,7 +135,7 @@ func TestPreparedControllerProcess(t *testing.T) {
 	if !regexp.MustCompile(`^[^\s]+@sha256:[a-f0-9]{64}$`).MatchString(cfg.Image) || cfg.Turn < 1 || cfg.Turn > 3 {
 		t.Fatal("bounded pinned probe required")
 	}
-	if !slices.Contains([]string{"", "reserved", "anchors-bound", "preparing", "prepared", "bound", "activating", "activated", "active", "removing", "native-absent", "anchor-pending", "anchor-absent", "removed", "observed", "recovery-volume", "recovered-binding"}, cfg.Barrier) {
+	if !slices.Contains([]string{"", "reserved", "anchors-bound", "preparing", "prepared", "bound", "activating", "activated", "active", "removing", "native-absent", "anchor-pending", "anchor-absent", "removed", "observed", "recovery-volume", "recovered-binding", "volume-intent", "volume-pending", "volume-absent", "volume-confirmed"}, cfg.Barrier) {
 		t.Fatal("unsupported fixture barrier")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -181,8 +182,22 @@ func TestPreparedControllerProcess(t *testing.T) {
 							stage = "recovered-binding"
 						}
 					case *runnersv1.UpdateVolumeCheckedResponse:
+						result.Volume = proto.Clone(response.Volume).(*runnersv1.Volume)
 						if cfg.Mode == "stop" {
 							stage = "recovery-volume"
+						} else if cfg.Mode == "retire" {
+							stage = "volume-intent"
+							if req.(*runnersv1.UpdateVolumeCheckedRequest).GetConfirmAnchoredRemoval() != nil {
+								stage = "volume-confirmed"
+							}
+						}
+					case *runnerv1.RemoveVolumeAnchoredResponse:
+						op.NativeState = response.State.String()
+						if response.State == runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_PENDING {
+							stage = "volume-pending"
+						}
+						if response.State == runnerv1.VolumeRemovalState_VOLUME_REMOVAL_STATE_ABSENT {
+							stage = "volume-absent"
 						}
 					case *runnerv1.ObserveWorkloadPreparationResponse:
 						result.Binding, stage = proto.Clone(response.Binding).(*runnerv1.WorkloadBinding), "observed"
@@ -269,6 +284,29 @@ func TestPreparedControllerProcess(t *testing.T) {
 				}
 			}
 			result.Workload = w
+		}
+	case "retire":
+		_, _, infos := cfg.request()
+		for {
+			var volume *runnersv1.GetVolumeResponse
+			volume, err = registry.GetVolume(ctx, &runnersv1.GetVolumeRequest{Id: infos[0].Key()})
+			if err != nil {
+				break
+			}
+			result.Volume = volume.Volume
+			var done bool
+			done, err = r.advanceVolumeRemoval(ctx, native, volume.Volume)
+			if done || err != nil && status.Code(err) != codes.Aborted {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				err = ctx.Err()
+			case <-time.After(100 * time.Millisecond):
+			}
+			if ctx.Err() != nil {
+				break
+			}
 		}
 	default:
 		t.Fatal("unsupported prepared child mode")
