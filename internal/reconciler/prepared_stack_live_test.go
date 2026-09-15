@@ -320,15 +320,15 @@ func TestLivePreparedExecutionStack(t *testing.T) {
 				cancelCfg := cfg
 				cancelCfg.Mode, cancelCfg.Barrier = "stop", ""
 				result := startPreparedController(t, cancelCfg).finish(t, ctx)
-				if !result.Error {
-					t.Fatal("unbound in-flight preparation was declared removed")
+				if result.Error {
+					t.Fatalf("in-flight preparation could not be observed and retired: %s", result.ErrorCode)
 				}
 				assertPreparedNoRedispatch(t, result)
-				w := state(t, cfg, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING)
-				if w.Preparation.Binding != nil || w.RemovalConfirmedAt != nil {
-					t.Fatal("cancellation invented a native receipt")
+				w := state(t, cfg, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED)
+				if !samePreparedBinding(w.Preparation.Binding, binding) || w.RemovalConfirmedAt == nil {
+					t.Fatal("cancellation lost its exact observed binding/removal")
 				}
-				blocked(t, cfg)
+				live.absent(t, ctx, binding)
 				child.release(t)
 				result = child.finish(t, ctx)
 				if !result.Error {
@@ -341,7 +341,7 @@ func TestLivePreparedExecutionStack(t *testing.T) {
 				}
 				stop(t, cfg, binding)
 				followup(t, cfg, binding, 1)
-				t.Log("cancellation won before binding; late receipt persisted only for cleanup; no activation or workspace effects")
+				t.Log("cancellation discovered and retired the exact unbound Pod; late prepare response could not reactivate it; next turn verified no prior effects")
 			})
 			for _, stage := range []string{"bound", "activating"} {
 				t.Run("cancel-before-execution-"+stage, func(t *testing.T) {
@@ -374,7 +374,7 @@ func TestLivePreparedExecutionStack(t *testing.T) {
 					t.Logf("retirement at %s excluded execution by the paused startup process; retained workspace has no prior effects", stage)
 				})
 			}
-			t.Run("unknown-prepare-outcome-retains-admission", func(t *testing.T) {
+			t.Run("unknown-prepare-recovery-and-three-process-replacement", func(t *testing.T) {
 				cfg := newConfig()
 				cfg.Barrier = "prepared"
 				child := startPreparedController(t, cfg)
@@ -382,44 +382,89 @@ func TestLivePreparedExecutionStack(t *testing.T) {
 				binding := barrier.Result.Binding
 				live.track(t, ctx, binding)
 				child.process.kill(t)
-				cfg.Mode, cfg.Barrier = "stop", ""
-				result := startPreparedController(t, cfg).finish(t, ctx)
-				if !result.Error {
-					t.Fatal("unknown prepare outcome was released")
+				registry.process.kill(t)
+				nativeProcess.kill(t)
+				nativeProcess, nativeAddress = startPreparedNative(stackT, ctx, nativeBinary, live)
+				registry = startCheckedRegistry(stackT, ctx, registryBinary, database.config)
+				cfg.RegistryAddress, cfg.RunnerAddress, cfg.Mode, cfg.Barrier = registry.address, nativeAddress, "stop", ""
+				w := state(t, cfg, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_PREPARING)
+				if w.Preparation.Binding != nil {
+					t.Fatal("lost reply was persisted before recovery")
+				}
+				live.gated(t, ctx, binding)
+				blocked(t, cfg)
+				stop(t, cfg, binding)
+				followup(t, cfg, binding, 1)
+				t.Log("controller/registry/native SIGKILL; fresh production recovery discovered, bound and removed the unexecuted Pod; same-PVC next turn verified no prior effects")
+			})
+			for _, checkpoint := range []string{"observed", "recovery-volume", "recovered-binding"} {
+				t.Run("recovery-crash-"+checkpoint, func(t *testing.T) {
+					cfg := newConfig()
+					cfg.Barrier = "prepared"
+					starter := startPreparedController(t, cfg)
+					binding := starter.awaitBarrier(t, ctx).Result.Binding
+					live.track(t, ctx, binding)
+					starter.process.kill(t)
+					cfg.Mode, cfg.Barrier = "stop", checkpoint
+					recovery := startPreparedController(t, cfg)
+					recovery.awaitBarrier(t, ctx)
+					state(t, cfg, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING)
+					live.gated(t, ctx, binding)
+					blocked(t, cfg)
+					recovery.process.kill(t)
+					cfg.Barrier = ""
+					stop(t, cfg, binding)
+					followup(t, cfg, binding, 1)
+					t.Logf("recovery SIGKILL after %s retained exact intent/bindings; fresh controller completed removal without redispatch; same-PVC first turn passed", checkpoint)
+				})
+			}
+			t.Run("competing-preparation-recovery", func(t *testing.T) {
+				cfg := newConfig()
+				cfg.Barrier = "prepared"
+				starter := startPreparedController(t, cfg)
+				binding := starter.awaitBarrier(t, ctx).Result.Binding
+				live.track(t, ctx, binding)
+				starter.process.kill(t)
+				cfg.Mode, cfg.Barrier = "stop", "observed"
+				stale := startPreparedController(t, cfg)
+				stale.awaitBarrier(t, ctx)
+				state(t, cfg, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING)
+				live.gated(t, ctx, binding)
+				blocked(t, cfg)
+				cfg.Barrier = ""
+				stop(t, cfg, binding)
+				stale.release(t)
+				result := stale.finish(t, ctx)
+				if result.Error || result.Workload.GetRemovalConfirmedAt() == nil || !samePreparedBinding(result.Workload.GetPreparation().GetBinding(), binding) {
+					t.Fatal("stale recovery did not accept exact competing retirement")
 				}
 				assertPreparedNoRedispatch(t, result)
 				for _, op := range result.Operations {
 					if op.Operation == runnerv1.RunnerService_RemovePreparedWorkload_FullMethodName {
-						t.Fatal("unknown native identity was removed")
+						t.Fatal("stale observer repeated already-confirmed native removal")
 					}
 				}
+				followup(t, cfg, binding, 1)
+				t.Log("overlapping controller processes converged on the same exact removal; stale observation caused no replay or repeated removal, and the next turn retained the workspace")
+			})
+			t.Run("missing-preparation-retains-admission", func(t *testing.T) {
+				cfg := newConfig()
+				cfg.Barrier = "preparing"
+				starter := startPreparedController(t, cfg)
+				starter.awaitBarrier(t, ctx)
+				starter.process.kill(t)
+				cfg.Mode, cfg.Barrier = "stop", ""
+				result := startPreparedController(t, cfg).finish(t, ctx)
+				if !result.Error {
+					t.Fatal("missing Pod was interpreted as final preparation absence")
+				}
+				assertPreparedNoRedispatch(t, result)
 				w := state(t, cfg, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING)
 				if w.Preparation.Binding != nil || w.RemovalConfirmedAt != nil {
-					t.Fatal("unknown outcome gained fabricated confirmation")
+					t.Fatal("missing preparation gained fabricated cleanup evidence")
 				}
-				live.gated(t, ctx, binding)
 				blocked(t, cfg)
-				// Only this disposable fixture has the intercepted native receipt.
-				// Removing its resource is not production discovery/reconciliation.
-				if err := wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
-					response, err := live.runner.RemovePreparedWorkload(ctx, &runnerv1.RemovePreparedWorkloadRequest{Expected: binding})
-					if status.Code(err) == codes.Aborted {
-						return false, nil
-					}
-					if err != nil {
-						return false, err
-					}
-					if !samePreparedBinding(response.Binding, binding) {
-						return false, fmt.Errorf("test-only cleanup receipt changed")
-					}
-					return response.State == runnerv1.PreparedWorkloadRemovalState_PREPARED_WORKLOAD_REMOVAL_STATE_ABSENT, nil
-				}); err != nil {
-					t.Fatalf("test-only gated cleanup failed: %v", err)
-				}
-				live.absent(t, ctx, binding)
-				blocked(t, cfg)
-				state(t, cfg, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING)
-				t.Log("unknown prepare quarantined, not recovered; test-only receipt cleanup did not release registry admission")
+				t.Log("NotFound retained unbound removal admission; no native cleanup or restart authority inferred")
 			})
 			for _, stage := range []string{"removing", "native-absent", "removed"} {
 				t.Run("removal-crash-"+stage, func(t *testing.T) {
