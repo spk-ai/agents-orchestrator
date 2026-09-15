@@ -5,6 +5,23 @@ registry `302b7c8` (migration 0026). These contributions are not installed and d
 not change A2A routing, agent profiles, workflow code or task/workspace ownership.
 Existing repository licensing is unchanged.
 
+## DNS-Compatible Lab Combination
+
+This lab branch combines controller `b08d43b` with the independent workload DNS
+correction `204b5e9`, group-consumer test repair `fdf60f9` and no-op context cleanup
+`0035aff`. The resulting source is `6669c08`. The focused contribution's older
+selected-race/vet limitations below describe that branch, not this combination.
+
+Both ordinary and unfiltered race suites pass 879 entries, with seven opt-in
+live/helper skips. Unfiltered `go vet ./...` and `go build ./...` pass. The full
+revocation process matrix also passes all 19 entries on this combined source,
+with no failures or skips. It uses the same native/registry binaries and pinned
+images as the focused acceptance; it does not exercise an actual Ziti overlay,
+provider authentication or A2A. The existing 41-entry execution regression
+passes on focused source `b08d43b`; it was not rerun on this combination. After
+both fixtures cleaned up, the shared installed baseline matched exactly. No
+deployment or installed workspace is changed.
+
 ## Behavior
 
 The shared agent-instance/sandbox stop path first persists `REMOVING`. A fully
@@ -63,7 +80,14 @@ the shared 12-minute owner-group deadline during the last sandbox cleanup.
 That run failed; its owned fixtures were removed and installed snapshots match.
 The expanded nineteen-scenario group now has a 15-minute aggregate budget,
 without changing each controller child's independent 120-second deadline or any
-assertion. The complete regression rerun is pending.
+assertion. The complete rerun finished at 09:48 UTC with all 38 scenarios, two
+owner groups and parent passing (41 entries), with no failures or skips. This
+checks the existing execution/removal paths on source `b08d43b`; the failed first
+attempt remains failed evidence, not a passing subset.
+
+After fixture cleanup, an independent snapshot again matched all 108 installed
+PVCs, 52 deployment specifications/readiness values, ten namespaces, 96
+ClusterRoles and 76 ClusterRoleBindings. No installed task Pods remained.
 
 ## Remaining Gates
 
