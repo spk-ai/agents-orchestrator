@@ -27,3 +27,8 @@ devspace dev
 # Watch mode (streams logs, re-syncs on changes)
 devspace dev -w
 ```
+
+## Test Validation
+
+[Group consumer synchronization](GROUP-CONSUMER-TEST.md) fixes two races in the
+retry/cancellation test without changing the production consumer or retry policy.
