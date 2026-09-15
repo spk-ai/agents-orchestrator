@@ -1570,18 +1570,26 @@ func (f *fakeRunnersClient) StreamWorkloadLogs(ctx context.Context, req *runnerv
 }
 
 type fakeRunnerClient struct {
-	prepareWorkload         func(context.Context, *runnerv1.PrepareWorkloadRequest, ...grpc.CallOption) (*runnerv1.PrepareWorkloadResponse, error)
-	activateWorkload        func(context.Context, *runnerv1.ActivateWorkloadRequest, ...grpc.CallOption) (*runnerv1.ActivateWorkloadResponse, error)
-	inspectPreparedWorkload func(context.Context, *runnerv1.InspectPreparedWorkloadRequest, ...grpc.CallOption) (*runnerv1.InspectPreparedWorkloadResponse, error)
-	removePreparedWorkload  func(context.Context, *runnerv1.RemovePreparedWorkloadRequest, ...grpc.CallOption) (*runnerv1.RemovePreparedWorkloadResponse, error)
-	removeVolumeBound       func(context.Context, *runnerv1.RemoveVolumeBoundRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error)
-	startWorkload           func(context.Context, *runnerv1.StartWorkloadRequest, ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error)
-	stopWorkload            func(context.Context, *runnerv1.StopWorkloadRequest, ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error)
-	listWorkloads           func(context.Context, *runnerv1.ListWorkloadsRequest, ...grpc.CallOption) (*runnerv1.ListWorkloadsResponse, error)
-	listVolumes             func(context.Context, *runnerv1.ListVolumesRequest, ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error)
-	removeVolume            func(context.Context, *runnerv1.RemoveVolumeRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeResponse, error)
-	inspectWorkload         func(context.Context, *runnerv1.InspectWorkloadRequest, ...grpc.CallOption) (*runnerv1.InspectWorkloadResponse, error)
-	findWorkloadsByLabels   func(context.Context, *runnerv1.FindWorkloadsByLabelsRequest, ...grpc.CallOption) (*runnerv1.FindWorkloadsByLabelsResponse, error)
+	observeWorkloadPreparation func(context.Context, *runnerv1.ObserveWorkloadPreparationRequest, ...grpc.CallOption) (*runnerv1.ObserveWorkloadPreparationResponse, error)
+	prepareWorkload            func(context.Context, *runnerv1.PrepareWorkloadRequest, ...grpc.CallOption) (*runnerv1.PrepareWorkloadResponse, error)
+	activateWorkload           func(context.Context, *runnerv1.ActivateWorkloadRequest, ...grpc.CallOption) (*runnerv1.ActivateWorkloadResponse, error)
+	inspectPreparedWorkload    func(context.Context, *runnerv1.InspectPreparedWorkloadRequest, ...grpc.CallOption) (*runnerv1.InspectPreparedWorkloadResponse, error)
+	removePreparedWorkload     func(context.Context, *runnerv1.RemovePreparedWorkloadRequest, ...grpc.CallOption) (*runnerv1.RemovePreparedWorkloadResponse, error)
+	removeVolumeBound          func(context.Context, *runnerv1.RemoveVolumeBoundRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error)
+	startWorkload              func(context.Context, *runnerv1.StartWorkloadRequest, ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error)
+	stopWorkload               func(context.Context, *runnerv1.StopWorkloadRequest, ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error)
+	listWorkloads              func(context.Context, *runnerv1.ListWorkloadsRequest, ...grpc.CallOption) (*runnerv1.ListWorkloadsResponse, error)
+	listVolumes                func(context.Context, *runnerv1.ListVolumesRequest, ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error)
+	removeVolume               func(context.Context, *runnerv1.RemoveVolumeRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeResponse, error)
+	inspectWorkload            func(context.Context, *runnerv1.InspectWorkloadRequest, ...grpc.CallOption) (*runnerv1.InspectWorkloadResponse, error)
+	findWorkloadsByLabels      func(context.Context, *runnerv1.FindWorkloadsByLabelsRequest, ...grpc.CallOption) (*runnerv1.FindWorkloadsByLabelsResponse, error)
+}
+
+func (f *fakeRunnerClient) ObserveWorkloadPreparation(ctx context.Context, req *runnerv1.ObserveWorkloadPreparationRequest, opts ...grpc.CallOption) (*runnerv1.ObserveWorkloadPreparationResponse, error) {
+	if f.observeWorkloadPreparation != nil {
+		return f.observeWorkloadPreparation(ctx, req, opts...)
+	}
+	return nil, status.Error(codes.Unimplemented, "preparation observation unavailable")
 }
 
 func (f *fakeRunnerClient) PrepareWorkload(ctx context.Context, req *runnerv1.PrepareWorkloadRequest, opts ...grpc.CallOption) (*runnerv1.PrepareWorkloadResponse, error) {
