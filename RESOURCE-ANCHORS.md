@@ -73,8 +73,8 @@ same skips, excluding exactly the pre-existing
 `TestGroupMembershipConsumerLoopRetriesWithoutBlocking` race. Build and
 `go vet -assign=false ./...` pass; unfiltered vet retains the existing
 `start_decision.go` self-assignment. Do not describe either excluded check as
-passing. A prior focused 20-run anchor race suite passed 1,780 entries before
-the additional cancellation-boundary tests were added.
+passing. The final focused 20-run anchor race suite passes 1,920 entries,
+including the additional cancellation-boundary tests, with no failures/skips.
 
 Regression coverage includes both owner kinds, native request projection,
 distinct APIs without fallback, immutable anchors and both revisions, volume
@@ -89,6 +89,15 @@ while preserving the volume owner. It also adds cancellation before preparation
 authority and SIGKILL at anchor-removal PENDING/ABSENT. Run this fixture with
 the exact dependent source revisions above; source tests alone are not its
 acceptance evidence.
+
+The final race-enabled combined run on 2026-09-15 passes all 38 scenarios plus
+the two owner groups and parent (41 entries), with no failures/skips. Actual
+inbox-thread IDs differ from legacy registry instance aliases. All three
+application processes are replaced during recovery; the database is not crashed.
+Fixture cleanup completes, and the independent installed-state comparison retains
+all 105 PVCs and 52 deployment snapshots with zero task Pods. Authorization and
+Agents display metadata remain fixtures, and the probe is credential-free Node,
+not a native agent or A2A client. This does not close the release requirements.
 
 ## Remaining Release Work
 
