@@ -32,6 +32,7 @@ const preparedStackLabel = "agyn.io/prepared-controller-test"
 type preparedControllerConfig struct {
 	RegistryAddress, RegistryToken, RunnerAddress, RunnerToken string
 	RunnerID, OrganizationID, OwnerID, AgentID, ThreadID       string
+	HumanOwnerID                                               string
 	DefinitionID, WorkloadID, RunID, Image, Mode, Barrier      string
 	Sandbox                                                    bool
 	Turn                                                       int
@@ -58,7 +59,7 @@ func (c preparedControllerConfig) request() (*runnersv1.CreateWorkloadRequest, *
 	agentID, threadID := c.AgentID, c.ThreadID
 	if c.Sandbox {
 		kind, agentID, threadID = runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_SANDBOX, "", ""
-		labels[assembler.LabelSandboxID], labels[assembler.LabelSandboxOwnerID] = c.OwnerID, "fixture-sandbox-user"
+		labels[assembler.LabelSandboxID], labels[assembler.LabelSandboxOwnerID] = c.OwnerID, c.HumanOwnerID
 		additional[assembler.LabelKeyPrefix+assembler.LabelSandboxID] = c.OwnerID
 	} else {
 		labels[assembler.LabelInstanceID], labels[assembler.LabelAgentID], labels[assembler.LabelThreadID] = c.OwnerID, agentID, threadID
@@ -80,7 +81,7 @@ fs.appendFileSync(path,owner+':'+turn+'\n');
 let heartbeat=0; function report(){ console.log(JSON.stringify({owner,turn,entries:fs.readFileSync(path,'utf8'),heartbeat:++heartbeat})); }
 report(); setInterval(report,250); process.on('SIGTERM',()=>process.exit(0)); setTimeout(()=>process.exit(74),180000);`, c.OwnerID, c.Turn, c.RunID)
 	return &runnersv1.CreateWorkloadRequest{Id: c.WorkloadID, RunnerId: c.RunnerID, OrganizationId: c.OrganizationID,
-			OwnerKind: kind, OwnerId: c.OwnerID, AgentId: agentID, ThreadId: threadID, Status: runnersv1.WorkloadStatus_WORKLOAD_STATUS_STARTING},
+			OwnerKind: kind, OwnerId: c.OwnerID, AgentId: agentID, ThreadId: preparedStackRegistryThread(c), Status: runnersv1.WorkloadStatus_WORKLOAD_STATUS_STARTING},
 		&runnerv1.StartWorkloadRequest{WorkloadId: c.WorkloadID, Labels: labels,
 			AdditionalProperties: additional,
 			Capabilities:         []string{"compute-resources"},
@@ -90,6 +91,13 @@ report(); setInterval(report,250); process.on('SIGTERM',()=>process.exit(0)); se
 				Resources:        &runnerv1.ComputeResources{RequestsCpu: "50m", RequestsMemory: "64Mi", LimitsCpu: "250m", LimitsMemory: "128Mi"}},
 			InlineFiles: map[string][]byte{"/fixture-marker": []byte(c.RunID)}, Volumes: []*runnerv1.VolumeSpec{info.Spec}},
 		[]assembler.PersistentVolumeInfo{info}
+}
+
+func preparedStackRegistryThread(c preparedControllerConfig) string {
+	if c.Sandbox {
+		return ""
+	}
+	return c.OwnerID
 }
 
 // A real OS child invokes the production shared lifecycle with real registry
@@ -118,7 +126,7 @@ func TestPreparedControllerProcess(t *testing.T) {
 			t.Fatal("fixture clients must use loopback")
 		}
 	}
-	for _, id := range []string{cfg.RunnerID, cfg.OrganizationID, cfg.OwnerID, cfg.AgentID, cfg.ThreadID, cfg.DefinitionID, cfg.WorkloadID, cfg.RunID} {
+	for _, id := range []string{cfg.RunnerID, cfg.OrganizationID, cfg.OwnerID, cfg.AgentID, cfg.ThreadID, cfg.DefinitionID, cfg.WorkloadID, cfg.RunID, cfg.HumanOwnerID} {
 		if !preparedUUID(id) {
 			t.Fatal("canonical child fixture identities required")
 		}
@@ -126,7 +134,7 @@ func TestPreparedControllerProcess(t *testing.T) {
 	if !regexp.MustCompile(`^[^\s]+@sha256:[a-f0-9]{64}$`).MatchString(cfg.Image) || cfg.Turn < 1 || cfg.Turn > 3 {
 		t.Fatal("bounded pinned probe required")
 	}
-	if !slices.Contains([]string{"", "reserved", "preparing", "prepared", "bound", "activating", "activated", "active", "removing", "native-absent", "removed", "observed", "recovery-volume", "recovered-binding"}, cfg.Barrier) {
+	if !slices.Contains([]string{"", "reserved", "anchors-bound", "preparing", "prepared", "bound", "activating", "activated", "active", "removing", "native-absent", "anchor-pending", "anchor-absent", "removed", "observed", "recovery-volume", "recovered-binding"}, cfg.Barrier) {
 		t.Fatal("unsupported fixture barrier")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -160,14 +168,16 @@ func TestPreparedControllerProcess(t *testing.T) {
 				stage := ""
 				if err == nil {
 					switch response := reply.(type) {
-					case *runnersv1.CreatePreparedWorkloadResponse:
+					case *runnersv1.CreateAnchoredWorkloadResponse:
 						result.Workload, stage = proto.Clone(response.Workload).(*runnersv1.Workload), "reserved"
-					case *runnersv1.UpdatePreparedWorkloadResponse:
+					case *runnersv1.BindWorkloadResourceAnchorsResponse:
+						result.Workload, stage = proto.Clone(response.Workload).(*runnersv1.Workload), "anchors-bound"
+					case *runnersv1.UpdateAnchoredWorkloadResponse:
 						result.Workload = proto.Clone(response.Workload).(*runnersv1.Workload)
 						stage = map[runnersv1.PreparedWorkloadPhase]string{
 							1: "reserved", 2: "preparing", 3: "bound", 4: "activating", 5: "active", 6: "removing", 7: "removed",
 						}[result.Workload.Preparation.Phase]
-						if cfg.Mode == "stop" && req.(*runnersv1.UpdatePreparedWorkloadRequest).GetBind() != nil {
+						if cfg.Mode == "stop" && req.(*runnersv1.UpdateAnchoredWorkloadRequest).Operation.GetBind() != nil {
 							stage = "recovered-binding"
 						}
 					case *runnersv1.UpdateVolumeCheckedResponse:
@@ -176,7 +186,7 @@ func TestPreparedControllerProcess(t *testing.T) {
 						}
 					case *runnerv1.ObserveWorkloadPreparationResponse:
 						result.Binding, stage = proto.Clone(response.Binding).(*runnerv1.WorkloadBinding), "observed"
-					case *runnerv1.PrepareWorkloadResponse:
+					case *runnerv1.PrepareAnchoredWorkloadResponse:
 						result.Binding, stage = proto.Clone(response.Binding).(*runnerv1.WorkloadBinding), "prepared"
 					case *runnerv1.ActivateWorkloadResponse:
 						result.Binding, stage = proto.Clone(response.Binding).(*runnerv1.WorkloadBinding), "activated"
@@ -185,6 +195,14 @@ func TestPreparedControllerProcess(t *testing.T) {
 						nativePending = response.State == runnerv1.PreparedWorkloadRemovalState_PREPARED_WORKLOAD_REMOVAL_STATE_PENDING
 						if response.State == runnerv1.PreparedWorkloadRemovalState_PREPARED_WORKLOAD_REMOVAL_STATE_ABSENT {
 							stage = "native-absent"
+						}
+					case *runnerv1.RemoveWorkloadAnchorResponse:
+						op.NativeState = response.State.String()
+						nativePending = response.State == runnerv1.ResourceAnchorRemovalState_RESOURCE_ANCHOR_REMOVAL_STATE_PENDING
+						if nativePending {
+							stage = "anchor-pending"
+						} else if response.State == runnerv1.ResourceAnchorRemovalState_RESOURCE_ANCHOR_REMOVAL_STATE_ABSENT {
+							stage = "anchor-absent"
 						}
 					}
 				}
@@ -207,7 +225,7 @@ func TestPreparedControllerProcess(t *testing.T) {
 			if !cfg.Sandbox || req.GetId() != cfg.OwnerID {
 				return nil, status.Error(codes.NotFound, "other fixture sandbox")
 			}
-			return &agentsv1.GetSandboxResponse{Sandbox: &agentsv1.Sandbox{Meta: &agentsv1.EntityMeta{Id: cfg.OwnerID}, OrganizationId: cfg.OrganizationID, OwnerId: "fixture-sandbox-user"}}, nil
+			return &agentsv1.GetSandboxResponse{Sandbox: &agentsv1.Sandbox{Meta: &agentsv1.EntityMeta{Id: cfg.OwnerID}, OrganizationId: cfg.OrganizationID, OwnerId: cfg.HumanOwnerID}}, nil
 		},
 	}}
 	switch cfg.Mode {

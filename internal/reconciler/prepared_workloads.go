@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -48,6 +49,9 @@ func validatePreparedWorkload(w *runnersv1.Workload) error {
 		}
 		ids[id] = true
 	}
+	if err := validateWorkloadAnchors(w); err != nil {
+		return err
+	}
 	if b := p.Binding; b != nil {
 		if b.WorkloadId != w.Meta.Id || b.BackendId != p.BackendId || !preparedUUID(b.InstanceUid) ||
 			w.GetInstanceId() != w.Meta.Id || len(b.Volumes) != len(ids) {
@@ -58,7 +62,7 @@ func validatePreparedWorkload(w *runnersv1.Workload) error {
 			if v == nil || !ids[v.VolumeKey] || names[v.InstanceId] || v.BackendId != p.BackendId {
 				return fmt.Errorf("prepared volume binding set mismatch")
 			}
-			if err := validateVolumeInstance(&runnersv1.Volume{Meta: &runnersv1.EntityMeta{Id: v.VolumeKey}, OwnerKind: w.OwnerKind, OwnerId: w.OwnerId, AgentId: w.AgentId}, v); err != nil {
+			if err := validateVolumeInstance(&runnersv1.Volume{Meta: &runnersv1.EntityMeta{Id: v.VolumeKey}, OwnerKind: w.OwnerKind, OwnerId: w.OwnerId, AgentId: w.AgentId, ResourceAnchor: workloadVolumeAnchor(w, v.VolumeKey)}, v); err != nil {
 				return err
 			}
 			delete(ids, v.VolumeKey)
@@ -141,9 +145,18 @@ func validatePreparedSuccessor(previous, w *runnersv1.Workload) error {
 	}
 	if !samePreparedIdentity(previous, w) || w.Preparation.Revision < previous.Preparation.Revision || w.Preparation.Phase < previous.Preparation.Phase ||
 		previous.Preparation.Binding != nil && !samePreparedBinding(previous.Preparation.Binding, w.Preparation.Binding) ||
-		w.Preparation.Revision == previous.Preparation.Revision && !proto.Equal(previous.Preparation, w.Preparation) ||
 		previous.RemovalConfirmedAt != nil && !proto.Equal(previous.RemovalConfirmedAt, w.RemovalConfirmedAt) {
 		return fmt.Errorf("prepared workload identity or lifecycle regressed")
+	}
+	if err := validateAnchorSuccessor(previous, w); err != nil {
+		return err
+	}
+	if w.Preparation.Revision == previous.Preparation.Revision {
+		a, b := proto.Clone(previous.Preparation).(*runnersv1.PreparedWorkloadLifecycle), proto.Clone(w.Preparation).(*runnersv1.PreparedWorkloadLifecycle)
+		a.Resources, b.Resources = nil, nil
+		if !proto.Equal(a, b) {
+			return fmt.Errorf("preparation changed without its revision")
+		}
 	}
 	if w.Preparation.Phase == runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED && w.Preparation.Binding == nil &&
 		previous.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_RESERVED && previous.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED {
@@ -156,7 +169,7 @@ func (r *Reconciler) updatePreparedWorkload(ctx context.Context, w *runnersv1.Wo
 	if err := validatePreparedWorkload(w); err != nil {
 		return nil, err
 	}
-	if w.Preparation.Revision == math.MaxInt64 {
+	if w.Preparation.Revision == math.MaxInt64 || w.Preparation.Resources.GetRevision() == math.MaxInt64 {
 		return nil, fmt.Errorf("preparation revision exhausted")
 	}
 	if request == nil || request.Operation == nil {
@@ -169,12 +182,21 @@ func (r *Reconciler) updatePreparedWorkload(ctx context.Context, w *runnersv1.Wo
 		expectedBinding = request.GetBind().GetBinding()
 	}
 	request.Id, request.ExpectedRevision = w.Meta.Id, w.Preparation.Revision
-	response, err := r.runners.UpdatePreparedWorkload(ctx, request)
+	var next *runnersv1.Workload
+	var err error
+	if resources := w.Preparation.Resources; resources != nil {
+		var response *runnersv1.UpdateAnchoredWorkloadResponse
+		response, err = r.runners.UpdateAnchoredWorkload(ctx, &runnersv1.UpdateAnchoredWorkloadRequest{Operation: request, ExpectedAnchorRevision: resources.Revision})
+		next = response.GetWorkload()
+	} else {
+		var response *runnersv1.UpdatePreparedWorkloadResponse
+		response, err = r.runners.UpdatePreparedWorkload(ctx, request)
+		next = response.GetWorkload()
+	}
 	if err != nil {
 		return nil, err
 	}
-	next := response.GetWorkload()
-	if err := validatePreparedWorkload(next); err != nil {
+	if err := validatePreparedSuccessor(w, next); err != nil {
 		return nil, err
 	}
 	if !samePreparedIdentity(w, next) || next.Preparation.Revision != w.Preparation.Revision+1 || next.Preparation.Phase != phase ||
@@ -197,6 +219,9 @@ func (r *Reconciler) stopPreparedWorkload(ctx context.Context, runner runnerv1.R
 	}
 	phase := w.Preparation.Phase
 	if phase == runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_RESERVED {
+		if err := revokePreparedAnchor(ctx, runner, w); err != nil {
+			return err
+		}
 		w, err = r.updatePreparedWorkload(ctx, w, &runnersv1.UpdatePreparedWorkloadRequest{Operation: &runnersv1.UpdatePreparedWorkloadRequest_AbortReservation{AbortReservation: &runnersv1.AbortWorkloadReservation{}}}, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED)
 	} else if phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING && phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED {
 		w, err = r.updatePreparedWorkload(ctx, w, &runnersv1.UpdatePreparedWorkloadRequest{Operation: &runnersv1.UpdatePreparedWorkloadRequest_BeginRemoval{BeginRemoval: &runnersv1.BeginPreparedWorkloadRemoval{}}}, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING)
@@ -206,10 +231,13 @@ func (r *Reconciler) stopPreparedWorkload(ctx context.Context, runner runnerv1.R
 	}
 	reflectPreparedWorkload(previous, w)
 	if w.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED && w.Preparation.Binding == nil {
-		w, err = r.recoverPreparedRemovalBinding(ctx, runner, w)
-		if err != nil {
-			return err
+		recovered, recoverErr := r.recoverPreparedRemovalBinding(ctx, runner, w)
+		if recoverErr != nil {
+			// Revocation excludes execution by late creates, but cannot itself
+			// prove child cleanup or release this unknown preparation's admission.
+			return errors.Join(recoverErr, revokePreparedAnchor(ctx, runner, w))
 		}
+		w = recovered
 		reflectPreparedWorkload(previous, w)
 	}
 	if w.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED {
@@ -222,6 +250,9 @@ func (r *Reconciler) stopPreparedWorkload(ctx context.Context, runner runnerv1.R
 		}
 		if response.GetState() != runnerv1.PreparedWorkloadRemovalState_PREPARED_WORKLOAD_REMOVAL_STATE_ABSENT {
 			return fmt.Errorf("prepared workload removal pending or unconfirmed")
+		}
+		if err := revokePreparedAnchor(ctx, runner, w); err != nil {
+			return err
 		}
 		w, err = r.updatePreparedWorkload(ctx, w, &runnersv1.UpdatePreparedWorkloadRequest{Operation: &runnersv1.UpdatePreparedWorkloadRequest_ConfirmRemoval{ConfirmRemoval: &runnersv1.ConfirmPreparedWorkloadRemoval{Observation: response}}}, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED)
 		if err != nil {

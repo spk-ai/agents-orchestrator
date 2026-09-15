@@ -57,6 +57,9 @@ func TestStartWorkloadCreatesIdentityAndStores(t *testing.T) {
 		t.Fatal("prepared startup did not complete")
 	}
 	m, request := f.lastMetadata, f.lastRequest.Workload
+	if target.ThreadID == target.AgentInstanceID || f.w.Preparation.Resources.Workload.IdentityLabels[assembler.LabelThreadID] != target.ThreadID.String() {
+		t.Fatal("native inbox thread was confused with the registry instance alias")
+	}
 	if m.Id != identityReq.WorkloadId || request.WorkloadId != m.Id || m.GetZitiIdentityId() != "ziti-identity" ||
 		m.RunnerId != f.v.RunnerId || m.AgentId != target.AgentID.String() || m.ThreadId != target.AgentInstanceID.String() ||
 		m.OrganizationId != testOrganizationID || m.OwnerId != target.AgentInstanceID.String() || m.OwnerKind != runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE ||
@@ -1325,6 +1328,9 @@ func (f *fakeRunnerDialer) Dial(ctx context.Context, runnerID string) (runnerv1.
 func (f *fakeRunnerDialer) Close() {}
 
 type fakeRunnersClient struct {
+	createAnchoredWorkload       func(context.Context, *runnersv1.CreateAnchoredWorkloadRequest, ...grpc.CallOption) (*runnersv1.CreateAnchoredWorkloadResponse, error)
+	bindWorkloadResourceAnchors  func(context.Context, *runnersv1.BindWorkloadResourceAnchorsRequest, ...grpc.CallOption) (*runnersv1.BindWorkloadResourceAnchorsResponse, error)
+	updateAnchoredWorkload       func(context.Context, *runnersv1.UpdateAnchoredWorkloadRequest, ...grpc.CallOption) (*runnersv1.UpdateAnchoredWorkloadResponse, error)
 	createPreparedWorkload       func(context.Context, *runnersv1.CreatePreparedWorkloadRequest, ...grpc.CallOption) (*runnersv1.CreatePreparedWorkloadResponse, error)
 	updatePreparedWorkload       func(context.Context, *runnersv1.UpdatePreparedWorkloadRequest, ...grpc.CallOption) (*runnersv1.UpdatePreparedWorkloadResponse, error)
 	getWorkload                  func(context.Context, *runnersv1.GetWorkloadRequest, ...grpc.CallOption) (*runnersv1.GetWorkloadResponse, error)
@@ -1570,6 +1576,9 @@ func (f *fakeRunnersClient) StreamWorkloadLogs(ctx context.Context, req *runnerv
 }
 
 type fakeRunnerClient struct {
+	reserveResourceAnchor      func(context.Context, *runnerv1.ReserveResourceAnchorRequest, ...grpc.CallOption) (*runnerv1.ReserveResourceAnchorResponse, error)
+	prepareAnchoredWorkload    func(context.Context, *runnerv1.PrepareAnchoredWorkloadRequest, ...grpc.CallOption) (*runnerv1.PrepareAnchoredWorkloadResponse, error)
+	removeWorkloadAnchor       func(context.Context, *runnerv1.RemoveWorkloadAnchorRequest, ...grpc.CallOption) (*runnerv1.RemoveWorkloadAnchorResponse, error)
 	observeWorkloadPreparation func(context.Context, *runnerv1.ObserveWorkloadPreparationRequest, ...grpc.CallOption) (*runnerv1.ObserveWorkloadPreparationResponse, error)
 	prepareWorkload            func(context.Context, *runnerv1.PrepareWorkloadRequest, ...grpc.CallOption) (*runnerv1.PrepareWorkloadResponse, error)
 	activateWorkload           func(context.Context, *runnerv1.ActivateWorkloadRequest, ...grpc.CallOption) (*runnerv1.ActivateWorkloadResponse, error)

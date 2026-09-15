@@ -2,13 +2,15 @@
 
 ## Lab Combination
 
-This `lab/prepared-recovery-native-dns` checkout combines retained prepared/DNS
-source `c932293` with recovery source/unit `5d8a9c8` and process acceptance
-`c2bb0e5` (cherry-picked as `ee98e50` and `a5eadd7`). The focused proposal below
-describes its separate review boundary; this lab branch includes the DNS fix.
-It is not an installed image or a bundled upstream proposal.
+This `lab/resource-anchors-native-dns` checkout adds resource-anchor controllers
+`2fddf9c` to the retained prepared/DNS and recovery combination `b3ec0e2`.
+The focused proposal below describes its separate review boundary; this lab
+branch includes the DNS fix. It is not an installed image or a bundled upstream
+proposal. Verification of the new combination is recorded in
+[RESOURCE-ANCHORS.md](RESOURCE-ANCHORS.md).
 
-Build and vet excluding the known `assign` failure pass. The selected full race
+Historical verification of `b3ec0e2`: build and vet excluding the known `assign`
+failure pass. The selected full race
 suite passes 666 entries with five gated skips and exactly the known
 group-consumer test excluded. A real PostgreSQL/Kubernetes/process subset passes
 four recovery scenarios plus both owner groups and parent (seven entries), with
@@ -17,6 +19,12 @@ processes and overlapping stale-observer recovery, for each owner kind. This
 subset verifies compatibility of the combined source, not a full A2A/native-agent
 or production DNS rollout. All installed deployment/storage snapshots remain
 unchanged; coordinated rollout and the remaining production gates are open.
+
+This branch now contains the dependent [resource-anchor controller integration](RESOURCE-ANCHORS.md).
+The preparation-recovery lifecycle below describes its base. New starts require
+the newer API/native/registry revisions in that report, including registry
+migrations through `0024`; the old reproduction combination below is not a
+substitute for those dependencies.
 
 ## Focused Proposal
 

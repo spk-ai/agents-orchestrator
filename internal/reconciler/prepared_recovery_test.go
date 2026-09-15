@@ -26,6 +26,7 @@ func lostPreparedOutcome(t *testing.T, sandbox bool, volumes string) (*preparedC
 			f.v.BoundInstance.IdentityLabels["sandbox-owner-id"] = f.humanOwner
 		}
 		f.v.InstanceId, f.created = stringPtr(f.v.BoundInstance.InstanceId), nil
+		f.seedAnchoredWorkspace()
 	}
 	prepare := f.native.prepareWorkload
 	f.native.prepareWorkload = func(ctx context.Context, req *runnerv1.PrepareWorkloadRequest, opts ...grpc.CallOption) (*runnerv1.PrepareWorkloadResponse, error) {
@@ -49,7 +50,7 @@ func recoveryObservation(f *preparedControllerFixture, b *runnerv1.WorkloadBindi
 	if f.w.OwnerKind == runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_SANDBOX {
 		labels["sandbox-id"], labels["sandbox-owner-id"] = f.w.OwnerId, f.humanOwner
 	} else {
-		labels["agent-instance-id"], labels["agent-id"], labels["thread-id"] = f.w.OwnerId, f.w.AgentId, f.w.ThreadId
+		labels["agent-instance-id"], labels["agent-id"], labels["thread-id"] = f.w.OwnerId, f.w.AgentId, f.request.Labels["thread-id"]
 	}
 	return &runnerv1.ObserveWorkloadPreparationResponse{Binding: proto.Clone(b).(*runnerv1.WorkloadBinding), IdentityLabels: labels, ResourceVersion: "17", SetupComplete: true}
 }
@@ -94,7 +95,7 @@ func TestPreparedRecoveryRetiresLostReplyWithoutRedispatch(t *testing.T) {
 
 func TestPreparedRecoveryRejectsUnverifiedObservations(t *testing.T) {
 	for _, sandbox := range []bool{false, true} {
-		for _, which := range []string{"not-found", "unimplemented", "nil", "revision", "workload", "backend", "pod-uid", "owner", "manager", "extra-label", "mixed-owner", "volumes", "volume-key", "volume-uid", "volume-generation", "volume-owner", "sandbox-user"} {
+		for _, which := range []string{"not-found", "unimplemented", "nil", "revision", "workload", "backend", "pod-uid", "owner", "thread", "manager", "extra-label", "mixed-owner", "volumes", "volume-key", "volume-uid", "volume-generation", "volume-owner", "sandbox-user"} {
 			t.Run(fmt.Sprintf("sandbox=%t/%s", sandbox, which), func(t *testing.T) {
 				f, binding, _ := lostPreparedOutcome(t, sandbox, "existing")
 				f.native.observeWorkloadPreparation = func(context.Context, *runnerv1.ObserveWorkloadPreparationRequest, ...grpc.CallOption) (*runnerv1.ObserveWorkloadPreparationResponse, error) {
@@ -117,6 +118,8 @@ func TestPreparedRecoveryRejectsUnverifiedObservations(t *testing.T) {
 					case "owner":
 						response.IdentityLabels["sandbox-id"] = uuid.NewString()
 						response.IdentityLabels["agent-instance-id"] = uuid.NewString()
+					case "thread":
+						response.IdentityLabels["thread-id"] = uuid.NewString()
 					case "manager":
 						response.IdentityLabels["managed-by"] = "other"
 					case "extra-label":

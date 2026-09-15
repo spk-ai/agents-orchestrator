@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -105,7 +106,7 @@ func newPreparedStackNamespace(t *testing.T, ctx context.Context, kubeconfig, ch
 		t.Fatal(err)
 	}
 	if _, err = kube.CoreV1().ResourceQuotas(ns.Name).Create(ctx, &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "fixture", Labels: labels}, Spec: corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{
-		corev1.ResourcePods: resource.MustParse("4"), corev1.ResourcePersistentVolumeClaims: resource.MustParse("16"), corev1.ResourceRequestsStorage: resource.MustParse("16Mi"),
+		corev1.ResourcePods: resource.MustParse("4"), corev1.ResourcePersistentVolumeClaims: resource.MustParse("20"), corev1.ResourceRequestsStorage: resource.MustParse("20Mi"),
 		corev1.ResourceRequestsCPU: resource.MustParse("500m"), corev1.ResourceRequestsMemory: resource.MustParse("512Mi"), corev1.ResourceLimitsCPU: resource.MustParse("2"), corev1.ResourceLimitsMemory: resource.MustParse("1Gi"),
 	}}}, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
@@ -212,6 +213,10 @@ func (f *preparedStackNamespace) track(t *testing.T, ctx context.Context, b *run
 	if err != nil || string(pod.UID) != b.InstanceUid || pod.Labels[preparedStackLabel] != f.run {
 		t.Fatal("independent prepared Pod identity differs")
 	}
+	workloadOwner := f.anchor(t, ctx, b.Anchor)
+	if len(pod.OwnerReferences) != 1 || pod.OwnerReferences[0].Kind != "ConfigMap" || pod.OwnerReferences[0].Name != workloadOwner.Name || pod.OwnerReferences[0].UID != workloadOwner.UID {
+		t.Fatal("Pod did not retain its persisted workload owner")
+	}
 	if old := f.bindings[b.WorkloadId]; old != nil && !samePreparedBinding(old, b) {
 		t.Fatal("fixture receipt changed")
 	}
@@ -220,6 +225,10 @@ func (f *preparedStackNamespace) track(t *testing.T, ctx context.Context, b *run
 		claim, err := f.kube.CoreV1().PersistentVolumeClaims(f.ns.Name).Get(ctx, v.InstanceId, metav1.GetOptions{})
 		if err != nil || string(claim.UID) != v.InstanceUid || claim.Labels[preparedStackLabel] != f.run {
 			t.Fatal("independent prepared PVC identity differs")
+		}
+		volumeOwner := f.anchor(t, ctx, v.Anchor)
+		if volumeOwner.UID == workloadOwner.UID || len(claim.OwnerReferences) != 1 || claim.OwnerReferences[0].Kind != "ConfigMap" || claim.OwnerReferences[0].Name != volumeOwner.Name || claim.OwnerReferences[0].UID != volumeOwner.UID {
+			t.Fatal("PVC does not have independent durable ownership")
 		}
 		if old := f.claims[claim.Name]; old != "" && old != claim.UID {
 			t.Fatal("fixture workspace replaced")
@@ -234,6 +243,42 @@ func (f *preparedStackNamespace) track(t *testing.T, ctx context.Context, b *run
 		if len(s.OwnerReferences) != 1 || s.OwnerReferences[0].UID != pod.UID || s.OwnerReferences[0].Name != pod.Name {
 			t.Fatal("temporary Secret lacks exact Pod ownership")
 		}
+	}
+}
+
+func (f *preparedStackNamespace) anchor(t *testing.T, ctx context.Context, a *runnerv1.ResourceAnchor) *corev1.ConfigMap {
+	t.Helper()
+	if a == nil || !preparedUUID(a.ResourceId) || !preparedUUID(a.InstanceUid) || a.BackendId != "kubernetes-namespace/v1/"+f.ns.Name+"/"+string(f.ns.UID) {
+		t.Fatal("complete fixture anchor identity required")
+	}
+	prefix := "workload-anchor-"
+	if a.Kind == runnerv1.ResourceAnchorKind_RESOURCE_ANCHOR_KIND_VOLUME {
+		prefix = "volume-anchor-"
+	} else if a.Kind != runnerv1.ResourceAnchorKind_RESOURCE_ANCHOR_KIND_WORKLOAD {
+		t.Fatal("unsupported fixture anchor kind")
+	}
+	cm, err := f.kube.CoreV1().ConfigMaps(f.ns.Name).Get(ctx, prefix+a.ResourceId, metav1.GetOptions{})
+	if err != nil || string(cm.UID) != a.InstanceUid || cm.DeletionTimestamp != nil || cm.Immutable == nil || !*cm.Immutable ||
+		len(cm.OwnerReferences) != 0 || !maps.Equal(cm.Labels, a.IdentityLabels) || cm.Annotations["agyn.io/resource-anchor-version"] != "v1" {
+		t.Fatal("independent native resource owner differs from persisted anchor")
+	}
+	expected := proto.Clone(a).(*runnerv1.ResourceAnchor)
+	expected.InstanceUid = ""
+	intent := &runnerv1.ResourceAnchor{}
+	if len(cm.Data) != 1 || protojson.Unmarshal([]byte(cm.Data["identity.json"]), intent) != nil || !proto.Equal(expected, intent) {
+		t.Fatal("native owner intent differs from registry")
+	}
+	return cm
+}
+
+func (f *preparedStackNamespace) anchorAbsent(t *testing.T, ctx context.Context, a *runnerv1.ResourceAnchor) {
+	t.Helper()
+	if a == nil || a.Kind != runnerv1.ResourceAnchorKind_RESOURCE_ANCHOR_KIND_WORKLOAD || !preparedUUID(a.ResourceId) ||
+		a.BackendId != "kubernetes-namespace/v1/"+f.ns.Name+"/"+string(f.ns.UID) {
+		t.Fatal("exact fixture workload anchor required")
+	}
+	if _, err := f.kube.CoreV1().ConfigMaps(f.ns.Name).Get(ctx, "workload-anchor-"+a.ResourceId, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatal("independent workload anchor absence unconfirmed")
 	}
 }
 
@@ -339,6 +384,7 @@ func (d *checkedStackDatabase) assertPreparedWorkload(t *testing.T, ctx context.
 	}
 	query := `SELECT json_build_object('status',w.status,'phase',w.preparation_phase,'revision',w.preparation_revision,'backend',w.prepared_backend_id,
 		'volumes',w.prepared_volume_ids,'binding',w.prepared_binding,'observation',w.prepared_removal_observation,'confirmed',w.removal_confirmed_at,
+		'anchors',w.resource_anchors,'anchoredOwner',g.resource_anchors_required,
 		'owner',w.owner_id,'runner',w.runner_id,'organization',w.organization_id,'thread',w.thread_id,'agent',w.agent_id,
 		'pinBackend',g.prepared_backend_id,'pinRunner',g.prepared_runner_id,'pinOrganization',g.prepared_organization_id,'pinThread',g.prepared_thread_id,'pinAgent',g.prepared_agent_id)::text
 		FROM "` + d.config.Schema + `".workloads w JOIN "` + d.config.Schema + `".runtime_volume_admission_guards g USING(owner_kind,owner_id) WHERE w.id='` + id + `'`
@@ -351,7 +397,8 @@ func (d *checkedStackDatabase) assertPreparedWorkload(t *testing.T, ctx context.
 		PinBackend, PinRunner, PinOrganization, PinThread, PinAgent        string
 		Revision                                                           uint64
 		Volumes                                                            []string
-		Binding, Observation                                               json.RawMessage
+		Binding, Observation, Anchors                                      json.RawMessage
+		AnchoredOwner                                                      bool
 		Confirmed                                                          *time.Time
 	}
 	if json.Unmarshal(data, &stored) != nil {
@@ -365,7 +412,8 @@ func (d *checkedStackDatabase) assertPreparedWorkload(t *testing.T, ctx context.
 	if stored.Status != strings.ToLower(strings.TrimPrefix(w.Status.String(), "WORKLOAD_STATUS_")) || stored.Phase != strings.ToLower(strings.TrimPrefix(w.Preparation.Phase.String(), "PREPARED_WORKLOAD_PHASE_")) ||
 		stored.Revision != w.Preparation.Revision || stored.Backend != w.Preparation.BackendId || !slices.Equal(stored.Volumes, w.Preparation.VolumeIds) ||
 		stored.Owner != w.OwnerId || stored.Runner != w.RunnerId || stored.Organization != w.OrganizationId || stored.Thread != w.ThreadId || stored.Agent != w.AgentId ||
-		stored.PinBackend != stored.Backend || stored.PinRunner != stored.Runner || stored.PinOrganization != stored.Organization || stored.PinThread != stored.Thread || stored.PinAgent != stored.Agent {
+		stored.PinBackend != stored.Backend || stored.PinRunner != stored.Runner || stored.PinOrganization != stored.Organization || stored.PinThread != stored.Thread || stored.PinAgent != stored.Agent ||
+		!stored.AnchoredOwner || w.Preparation.Resources == nil {
 		t.Fatal("prepared registry response/owner pin differs from independent SQL read")
 	}
 	if (stored.Confirmed == nil) != (w.RemovalConfirmedAt == nil) || stored.Confirmed != nil && !stored.Confirmed.Equal(w.RemovalConfirmedAt.AsTime()) {
@@ -374,7 +422,7 @@ func (d *checkedStackDatabase) assertPreparedWorkload(t *testing.T, ctx context.
 	for _, v := range []struct {
 		raw     json.RawMessage
 		message proto.Message
-	}{{stored.Binding, w.Preparation.Binding}, {stored.Observation, w.Preparation.RemovalObservation}} {
+	}{{stored.Binding, w.Preparation.Binding}, {stored.Observation, w.Preparation.RemovalObservation}, {stored.Anchors, w.Preparation.Resources}} {
 		if string(v.raw) == "null" {
 			if v.message.ProtoReflect().IsValid() {
 				t.Fatal("registry invented unpersisted native receipt")
@@ -384,6 +432,33 @@ func (d *checkedStackDatabase) assertPreparedWorkload(t *testing.T, ctx context.
 		expected := v.message.ProtoReflect().New().Interface()
 		if protojson.Unmarshal(v.raw, expected) != nil || !proto.Equal(expected, v.message) {
 			t.Fatal("native receipt differs from independent SQL read")
+		}
+	}
+	for _, id := range w.Preparation.VolumeIds {
+		v := d.assertVolume(t, ctx, client, id)
+		query := `SELECT json_build_object('anchor',resource_anchor,'reservation',anchor_reservation)::text FROM "` + d.config.Schema + `".volumes WHERE id='` + id + `'`
+		data, err := checkedStackDocker(ctx, "exec", d.id, "psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "runners_controller_acceptance", "-c", query)
+		var ownership struct{ Anchor, Reservation json.RawMessage }
+		if err != nil || json.Unmarshal(data, &ownership) != nil {
+			t.Fatal("independent volume ownership read failed")
+		}
+		for _, field := range []struct {
+			raw     json.RawMessage
+			message proto.Message
+		}{{ownership.Anchor, v.ResourceAnchor}, {ownership.Reservation, v.AnchorReservation}} {
+			if string(field.raw) == "null" {
+				if field.message.ProtoReflect().IsValid() {
+					t.Fatal("registry invented a volume anchor or reservation receipt")
+				}
+				continue
+			}
+			expected := field.message.ProtoReflect().New().Interface()
+			if protojson.Unmarshal(field.raw, expected) != nil || !proto.Equal(expected, field.message) {
+				t.Fatal("volume ownership differs from independent SQL read")
+			}
+		}
+		if w.Preparation.Resources.Workload != nil && !proto.Equal(workloadVolumeAnchor(w, id), v.ResourceAnchor) {
+			t.Fatal("workload and persistent volume have different native owners")
 		}
 	}
 	return w
