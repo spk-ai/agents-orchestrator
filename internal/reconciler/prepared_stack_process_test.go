@@ -39,12 +39,14 @@ type preparedControllerConfig struct {
 }
 
 type preparedControllerResult struct {
-	Operations []checkedControllerOperation
-	Workload   *runnersv1.Workload
-	Binding    *runnerv1.WorkloadBinding
-	Volume     *runnersv1.Volume
-	Error      bool
-	ErrorCode  string
+	Operations            []checkedControllerOperation
+	Workload              *runnersv1.Workload
+	Binding               *runnerv1.WorkloadBinding
+	Volume                *runnersv1.Volume
+	Error                 bool
+	ErrorCode             string
+	Revocation            *runnerv1.PreparationRevocation
+	RevocationObservation *runnerv1.ObservePreparationRevocationResponse
 }
 
 type preparedControllerBarrier struct {
@@ -135,7 +137,7 @@ func TestPreparedControllerProcess(t *testing.T) {
 	if !regexp.MustCompile(`^[^\s]+@sha256:[a-f0-9]{64}$`).MatchString(cfg.Image) || cfg.Turn < 1 || cfg.Turn > 3 {
 		t.Fatal("bounded pinned probe required")
 	}
-	if !slices.Contains([]string{"", "reserved", "anchors-bound", "preparing", "prepared", "bound", "activating", "activated", "active", "removing", "native-absent", "anchor-pending", "anchor-absent", "removed", "observed", "recovery-volume", "recovered-binding", "volume-intent", "volume-pending", "volume-absent", "volume-confirmed"}, cfg.Barrier) {
+	if !slices.Contains([]string{"", "reserved", "anchors-bound", "preparing", "prepared", "bound", "activating", "activated", "active", "removing", "native-absent", "anchor-pending", "anchor-absent", "removed", "observed", "recovery-volume", "recovered-binding", "volume-intent", "volume-pending", "volume-absent", "volume-confirmed", "preparation-revoked", "revocation-recorded", "revocation-observed", "revocation-confirmed"}, cfg.Barrier) {
 		t.Fatal("unsupported fixture barrier")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -181,6 +183,12 @@ func TestPreparedControllerProcess(t *testing.T) {
 						if cfg.Mode == "stop" && req.(*runnersv1.UpdateAnchoredWorkloadRequest).Operation.GetBind() != nil {
 							stage = "recovered-binding"
 						}
+						if req.(*runnersv1.UpdateAnchoredWorkloadRequest).Operation.GetRecordRevocation() != nil {
+							stage = "revocation-recorded"
+						}
+						if req.(*runnersv1.UpdateAnchoredWorkloadRequest).Operation.GetConfirmRevocation() != nil {
+							stage = "revocation-confirmed"
+						}
 					case *runnersv1.UpdateVolumeCheckedResponse:
 						result.Volume = proto.Clone(response.Volume).(*runnersv1.Volume)
 						if cfg.Mode == "stop" {
@@ -201,6 +209,15 @@ func TestPreparedControllerProcess(t *testing.T) {
 						}
 					case *runnerv1.ObserveWorkloadPreparationResponse:
 						result.Binding, stage = proto.Clone(response.Binding).(*runnerv1.WorkloadBinding), "observed"
+					case *runnerv1.RevokeWorkloadPreparationResponse:
+						result.Revocation, stage = proto.Clone(response.Revocation).(*runnerv1.PreparationRevocation), "preparation-revoked"
+					case *runnerv1.ObservePreparationRevocationResponse:
+						result.RevocationObservation = proto.Clone(response).(*runnerv1.ObservePreparationRevocationResponse)
+						op.NativeState = response.State.String()
+						nativePending = response.State == runnerv1.RevokedPreparationState_REVOKED_PREPARATION_STATE_PENDING
+						if response.State == runnerv1.RevokedPreparationState_REVOKED_PREPARATION_STATE_POD_ABSENT {
+							stage = "revocation-observed"
+						}
 					case *runnerv1.PrepareAnchoredWorkloadResponse:
 						result.Binding, stage = proto.Clone(response.Binding).(*runnerv1.WorkloadBinding), "prepared"
 					case *runnerv1.ActivateWorkloadResponse:

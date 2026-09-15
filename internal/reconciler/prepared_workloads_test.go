@@ -254,6 +254,26 @@ func (f *preparedControllerFixture) transition(_ context.Context, req *runnersv1
 		}
 		p.RemovalObservation = proto.Clone(op.ConfirmRemoval.Observation).(*runnerv1.RemovePreparedWorkloadResponse)
 		p.Phase = runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED
+	case *runnersv1.UpdatePreparedWorkloadRequest_RecordRevocation:
+		requirePhase(runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING)
+		if p.Binding != nil || p.Resources.GetWorkload() == nil || p.Resources.PreparationRevocation != nil || p.Resources.RevocationObservation != nil {
+			f.t.Fatal("revocation without an unbound anchored removal intent")
+		}
+		p.Resources.PreparationRevocation = proto.Clone(op.RecordRevocation.Revocation).(*runnerv1.PreparationRevocation)
+	case *runnersv1.UpdatePreparedWorkloadRequest_ConfirmRevocation:
+		requirePhase(runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING)
+		observation := op.ConfirmRevocation.Observation
+		if p.Binding != nil || p.Resources.PreparationRevocation == nil || !proto.Equal(p.Resources.PreparationRevocation, observation.Revocation) ||
+			observation.State != runnerv1.RevokedPreparationState_REVOKED_PREPARATION_STATE_POD_ABSENT {
+			f.t.Fatal("revocation confirmation before persisted proof or without absence")
+		}
+		for _, v := range observation.Volumes {
+			if f.v.Status != runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE || !proto.Equal(f.v.BoundInstance, v) {
+				f.t.Fatal("revocation confirmation before checked PVC binding")
+			}
+		}
+		p.Resources.RevocationObservation = proto.Clone(observation).(*runnerv1.ObservePreparationRevocationResponse)
+		p.Phase = runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED
 	case *runnersv1.UpdatePreparedWorkloadRequest_AbortReservation:
 		requirePhase(runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_RESERVED)
 		p.Phase = runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED

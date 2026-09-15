@@ -157,7 +157,9 @@ func TestLivePreparedExecutionStack(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			stackT := t
-			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+			// Nineteen sequential scenarios include native GC and process replacement.
+			// Keep the independent 120-second controller-operation bounds unchanged.
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 			defer cancel()
 			live := newPreparedStackNamespace(t, ctx, kubeconfig, chart)
 			nativeProcess, nativeAddress := startPreparedNative(t, ctx, nativeBinary, live)
@@ -454,24 +456,26 @@ func TestLivePreparedExecutionStack(t *testing.T) {
 				followup(t, cfg, binding, 1)
 				t.Log("overlapping controller processes converged on the same exact removal; stale observation caused no replay or repeated removal, and the next turn retained the workspace")
 			})
-			t.Run("missing-preparation-retains-admission", func(t *testing.T) {
+			t.Run("missing-preparation-revokes-before-release", func(t *testing.T) {
 				cfg := newConfig()
 				cfg.Barrier = "preparing"
 				starter := startPreparedController(t, cfg)
 				starter.awaitBarrier(t, ctx)
 				starter.process.kill(t)
 				cfg.Mode, cfg.Barrier = "stop", ""
-				result := startPreparedController(t, cfg).finish(t, ctx)
-				if !result.Error {
-					t.Fatal("missing Pod was interpreted as final preparation absence")
-				}
+				result := run(t, cfg)
 				assertPreparedNoRedispatch(t, result)
-				w := state(t, cfg, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING)
-				if w.Preparation.Binding != nil || w.RemovalConfirmedAt != nil {
-					t.Fatal("missing preparation gained fabricated cleanup evidence")
+				w := state(t, cfg, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED)
+				if w.Preparation.Binding != nil || w.RemovalConfirmedAt == nil || w.Preparation.Resources.GetRevocationObservation() == nil {
+					t.Fatal("missing preparation did not preserve its distinct revocation evidence")
 				}
-				blocked(t, cfg)
-				t.Log("NotFound retained unbound removal admission; no native cleanup or restart authority inferred")
+				live.trackRevocation(t, ctx, w.Preparation.Resources.PreparationRevocation)
+				live.anchorAbsent(t, ctx, w.Preparation.Resources.Workload)
+				cfg.Mode, cfg.WorkloadID = "start", uuid.NewString()
+				first := run(t, cfg).Workload.Preparation.Binding
+				live.probe(t, ctx, cfg, first, 0)
+				stop(t, cfg, first)
+				t.Log("native revocation and independently persisted observation released admission without a fabricated Pod UID; explicit first turn verified no prior effects")
 			})
 			for _, stage := range []string{"removing", "native-absent", "anchor-pending", "anchor-absent", "removed"} {
 				t.Run("removal-crash-"+stage, func(t *testing.T) {

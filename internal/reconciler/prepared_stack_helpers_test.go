@@ -45,6 +45,7 @@ type preparedStackNamespace struct {
 	run, token, kubeconfig string
 	bindings               map[string]*runnerv1.WorkloadBinding
 	claims                 map[string]types.UID
+	revocations            map[string]*runnerv1.PreparationRevocation
 	runner                 runnerv1.RunnerServiceClient
 	role                   *rbacv1.ClusterRole
 	roleBinding            *rbacv1.ClusterRoleBinding
@@ -63,7 +64,7 @@ func newPreparedStackNamespace(t *testing.T, ctx context.Context, kubeconfig, ch
 		t.Fatal("fixture Kubernetes client unavailable")
 	}
 	run := uuid.NewString()
-	f := &preparedStackNamespace{kube: kube, run: run, token: checkedStackSecret(t), kubeconfig: kubeconfig, bindings: map[string]*runnerv1.WorkloadBinding{}, claims: map[string]types.UID{}}
+	f := &preparedStackNamespace{kube: kube, run: run, token: checkedStackSecret(t), kubeconfig: kubeconfig, bindings: map[string]*runnerv1.WorkloadBinding{}, claims: map[string]types.UID{}, revocations: map[string]*runnerv1.PreparationRevocation{}}
 	labels := map[string]string{preparedStackLabel: run}
 	ns, err := kube.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "orchestrator-prepared-" + run[:12], Labels: labels}}, metav1.CreateOptions{})
 	if err != nil {
@@ -156,6 +157,12 @@ func (f *preparedStackNamespace) cleanupNamespace(t *testing.T) {
 	if err != nil || len(services.Items) != 0 {
 		t.Error("unexpected fixture Service; cleanup refused")
 		return
+	}
+	for _, proof := range f.revocations {
+		if err := f.readRevocation(ctx, proof); err != nil {
+			t.Errorf("revocation identity changed; namespace cleanup refused: %v", err)
+			return
+		}
 	}
 	if err := f.kube.CoreV1().Namespaces().Delete(ctx, ns.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &ns.UID, ResourceVersion: &ns.ResourceVersion}}); err != nil {
 		t.Error(err)
@@ -280,6 +287,38 @@ func (f *preparedStackNamespace) anchorAbsent(t *testing.T, ctx context.Context,
 	if _, err := f.kube.CoreV1().ConfigMaps(f.ns.Name).Get(ctx, "workload-anchor-"+a.ResourceId, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatal("independent workload anchor absence unconfirmed")
 	}
+}
+
+func (f *preparedStackNamespace) readRevocation(ctx context.Context, proof *runnerv1.PreparationRevocation) error {
+	if proof == nil || proof.WorkloadAnchor == nil || !preparedUUID(proof.InstanceUid) || !preparedUUID(proof.WorkloadAnchor.ResourceId) ||
+		proof.WorkloadAnchor.BackendId != "kubernetes-namespace/v1/"+f.ns.Name+"/"+string(f.ns.UID) {
+		return fmt.Errorf("complete namespace-bound revocation required")
+	}
+	cm, err := f.kube.CoreV1().ConfigMaps(f.ns.Name).Get(ctx, "preparation-revocation-"+proof.WorkloadAnchor.ResourceId, metav1.GetOptions{})
+	if err != nil || string(cm.UID) != proof.InstanceUid || cm.Immutable == nil || !*cm.Immutable || cm.DeletionTimestamp != nil ||
+		len(cm.OwnerReferences) != 0 || !maps.Equal(cm.Labels, proof.WorkloadAnchor.IdentityLabels) || cm.Annotations["agyn.io/preparation-revocation-version"] != "v1" || len(cm.Data) != 1 || len(cm.BinaryData) != 0 {
+		return fmt.Errorf("native revocation record differs from receipt")
+	}
+	stored := &runnerv1.PreparationRevocation{}
+	if protojson.Unmarshal([]byte(cm.Data["revocation.json"]), stored) != nil || stored.InstanceUid != "" {
+		return fmt.Errorf("invalid native revocation payload")
+	}
+	stored.InstanceUid = string(cm.UID)
+	if !proto.Equal(proof, stored) {
+		return fmt.Errorf("native revocation payload changed")
+	}
+	return nil
+}
+
+func (f *preparedStackNamespace) trackRevocation(t *testing.T, ctx context.Context, proof *runnerv1.PreparationRevocation) {
+	t.Helper()
+	if err := f.readRevocation(ctx, proof); err != nil {
+		t.Fatal(err)
+	}
+	if prior := f.revocations[proof.WorkloadAnchor.ResourceId]; prior != nil && !proto.Equal(prior, proof) {
+		t.Fatal("revocation fixture receipt replaced")
+	}
+	f.revocations[proof.WorkloadAnchor.ResourceId] = proto.Clone(proof).(*runnerv1.PreparationRevocation)
 }
 
 // Captured receipts are test-only cleanup authority. In the unknown-prepare

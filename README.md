@@ -1,5 +1,8 @@
 # Agents Orchestrator Service
 
+The dependent [preparation-revocation controller](PREPARATION-REVOCATION.md)
+recovers unbound interrupted provisioning while preserving task workspaces.
+
 The Agents Orchestrator runs a background reconciler that ensures agent workloads
 exist for threads with unacknowledged agent messages.
 

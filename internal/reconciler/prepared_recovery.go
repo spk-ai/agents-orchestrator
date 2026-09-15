@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 
@@ -49,11 +50,18 @@ func (r *Reconciler) recoverPreparedRemovalBinding(ctx context.Context, runner r
 	if err := validatePreparedWorkload(previous); err != nil {
 		return nil, err
 	}
-	if previous.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING || previous.Preparation.Binding != nil {
+	if previous.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING || previous.Preparation.Binding != nil || previous.Preparation.Resources.GetPreparationRevocation() != nil {
 		return nil, fmt.Errorf("preparation discovery requires an unbound durable removal intent")
 	}
 	observation, err := runner.ObserveWorkloadPreparation(ctx, &runnerv1.ObserveWorkloadPreparationRequest{WorkloadId: previous.Meta.Id, BackendId: previous.Preparation.BackendId})
 	if err != nil {
+		if previous.Preparation.Resources.GetWorkload() != nil {
+			recovered, revokeErr := r.recoverRevokedPreparation(ctx, runner, previous)
+			if revokeErr == nil {
+				return recovered, nil
+			}
+			err = errors.Join(revokeErr, err)
+		}
 		// Neither NotFound nor an unsupported capability releases admission.
 		return nil, fmt.Errorf("workload %s preparation outcome unknown; admission retained: %w", previous.Meta.Id, err)
 	}
