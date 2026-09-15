@@ -131,6 +131,7 @@ func run() error {
 				return nil, status.Error(codes.PermissionDenied, "fixture workload ownership required")
 			}
 		case runnerv1.RunnerService_ListVolumes_FullMethodName,
+			runnerv1.RunnerService_ObserveWorkloadPreparation_FullMethodName,
 			runnerv1.RunnerService_InspectPreparedWorkload_FullMethodName,
 			runnerv1.RunnerService_ActivateWorkload_FullMethodName,
 			runnerv1.RunnerService_RemovePreparedWorkload_FullMethodName:

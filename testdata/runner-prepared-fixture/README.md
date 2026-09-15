@@ -7,9 +7,10 @@ whose namespace still prohibits Pod execution.
 
 ## Reproduce
 
-Use matching generated APIs in the reviewed checkouts: API `24b73ca`, Runners
-`e7c42f4` (through migration `0022`), and k8s-runner `1a5a7b6`. The controller
-branch is `feat/prepared-workloads`; API generation is in
+Use matching generated APIs in the reviewed checkouts: API `d6449dd` and
+k8s-runner `6fdcc41` (`feat/prepared-outcome-observation`), and Runners `e7c42f4` (through migration
+`0022`, unchanged). The controller branch is `feat/prepared-outcome-recovery`;
+API generation is in
 [`PREPARED-WORKLOADS.md`](../../PREPARED-WORKLOADS.md). These are dependent
 contribution proposals, not stock Agyn releases.
 
@@ -26,7 +27,7 @@ PREPARED_RUNNER_BINARY="$RUNNER_BINARY" \
 PREPARED_RUNNER_CHART="$RUNNER_CHECKOUT/charts/k8s-runner/values.yaml" \
 CHECKED_POSTGRES_IMAGE="$POSTGRES_IMAGE" \
 PREPARED_NODE_IMAGE="$NODE_IMAGE" \
-go test -race -json ./internal/reconciler \
+go test -race -vet=off -json ./internal/reconciler \
   -run '^TestLivePreparedExecutionStack$' -count=1 -timeout=30m
 ```
 
@@ -34,7 +35,9 @@ Both images must be reviewed digest-pinned references. PostgreSQL must already
 exist on the local Unix-socket Docker daemon. The native Node image must be
 available to Kubernetes. No provider credential, agent CLI, platform database,
 deployment update or installed workspace is used. Both fixture builders and
-the controller test executable enable the race detector.
+the controller test executable enable the race detector. Vet is disabled here
+only because of the documented pre-existing self-assignment; separate vet with
+`-assign=false` must still pass.
 
 ## Assertions
 
@@ -50,14 +53,21 @@ For both agent-instance and sandbox owners:
   leaves SQL at ACTIVATING. All three application processes are replaced.
   Read-only health reconciliation confirms ACTIVE/RUNNING, with no new prepare
   or activate RPC and no repeated workspace effect.
-- Cancellation during prepare permits the late receipt to bind only for
-  cleanup. Cancellation at BOUND and ACTIVATING prevents the paused startup
+- Cancellation during prepare discovers and removes the unbound Pod before the
+  late reply reaches its caller. Cancellation at BOUND and ACTIVATING prevents the paused startup
   from executing after the exact Pod has been retired. A following turn verifies
   the workspace still contains no canceled-turn effect.
-- SIGKILL after prepare but before binding leaves an unknown outcome. Recovery
-  does not invent a receipt, activate, delete by name or release admission. The
-  parent uses its intercepted receipt solely to clean up its disposable Pod;
-  this does **not** reconcile or release the production registry record.
+- SIGKILL after prepare but before binding leaves an unknown outcome. All three
+  application processes are replaced. Fresh production recovery observes the
+  gated Pod through the new RPC, validates/persists exact volume and workload
+  bindings into REMOVING and confirms exact native removal before follow-up.
+- Recovery itself is SIGKILLed after observation, volume binding and workload
+  binding. Fresh controllers finish retirement without prepare/activate replay.
+- Overlapping controller processes converge on the same removal: a paused stale
+  observer accepts another controller's durable confirmation without repeating
+  removal. The next turn uses the same PVC and verifies no earlier execution.
+- A killed PREPARING caller with no native Pod retains admission on NotFound.
+  The fixture does not turn that observation into late-create fencing.
 - SIGKILL after removal intent, native ABSENT and registry confirmation preserves
   committed state. A new controller observes/removes the exact predecessor
   before a new turn; billing timestamps and pending removal do not release it.
@@ -94,11 +104,12 @@ PostgreSQL uses the existing helper's one CPU, 512 MiB memory, 128 PID and
 Cleanup uses captured exact bindings and native ABSENT observations, verifies
 Pod/PVC UIDs, refuses unknown resources and remaining workload holds, observes
 temporary Secret GC, then removes only the owned namespace and exact GET-only
-cluster RBAC objects. It does not strip finalizers. Unknown-outcome test receipts
-are not presented as a production intent-discovery API. Process exit failures,
+cluster RBAC objects. It does not strip finalizers. Production recovery uses the
+actual native observation RPC; parent-captured bindings independently validate
+its result and are retained solely for bounded fixture cleanup. Process exit failures,
 including race reports, fail acceptance; only joined deliberate SIGKILL exits
 are exempted.
 
-Full A2A acceptance, uncertain/late-prepare resource recovery, authenticated
+Full A2A acceptance, initially absent/late-prepare resource recovery, authenticated
 routes, node/storage fencing, legacy adoption, durable credential cleanup and
 coordinated production rollout remain separate release requirements.

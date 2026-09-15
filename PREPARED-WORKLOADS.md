@@ -73,6 +73,29 @@ workload bind, native removal and confirmation. Build and vet excluding `assign`
 pass; the unchanged full-vet self-assignment remains. Generated LLM API churn is
 excluded from the contribution and these final source checks.
 
+## Recovery Process Acceptance
+
+The final opt-in execution run on 2026-09-15 passes **32 scenarios plus both
+owner groups and parent** (35 entries), with no failures/skips, under the race
+detector. It uses real PostgreSQL, registry/native RPCs, separate controller
+processes and Kubernetes, with independent SQL and Pod/PVC identity checks.
+
+Both owner paths recover a lost prepare response after SIGKILL/replacement of
+all three application processes. Recovery itself survives SIGKILL after native
+observation, volume binding and workload binding. Overlapping controllers also
+converge: a stale observer accepts another controller's exact durable removal
+without repeating native removal. Cancellation retires an unbound Pod before
+its delayed prepare reply arrives. An initially missing preparation retains
+admission; it does not gain an invented absence receipt.
+
+Each recovered unexecuted Pod is followed by a new-Pod/same-PVC first turn that
+verifies no prior effects. The previous parallel/follow-up, activation-ACK loss,
+removal-crash and unused-reservation scenarios remain enabled. Agents metadata,
+authorization tuple writes and the sandbox owner lookup are still explicit
+stubs; no native agent, model credentials, A2A workflow or actual Ziti policy is
+under test. Production rollout, initially absent/late-operation fencing and
+durable credential revocation remain open.
+
 ## Earlier Verification
 
 On 2026-09-14:

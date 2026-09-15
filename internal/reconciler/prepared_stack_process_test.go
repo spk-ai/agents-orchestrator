@@ -126,7 +126,7 @@ func TestPreparedControllerProcess(t *testing.T) {
 	if !regexp.MustCompile(`^[^\s]+@sha256:[a-f0-9]{64}$`).MatchString(cfg.Image) || cfg.Turn < 1 || cfg.Turn > 3 {
 		t.Fatal("bounded pinned probe required")
 	}
-	if !slices.Contains([]string{"", "reserved", "preparing", "prepared", "bound", "activating", "activated", "active", "removing", "native-absent", "removed"}, cfg.Barrier) {
+	if !slices.Contains([]string{"", "reserved", "preparing", "prepared", "bound", "activating", "activated", "active", "removing", "native-absent", "removed", "observed", "recovery-volume", "recovered-binding"}, cfg.Barrier) {
 		t.Fatal("unsupported fixture barrier")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -167,6 +167,15 @@ func TestPreparedControllerProcess(t *testing.T) {
 						stage = map[runnersv1.PreparedWorkloadPhase]string{
 							1: "reserved", 2: "preparing", 3: "bound", 4: "activating", 5: "active", 6: "removing", 7: "removed",
 						}[result.Workload.Preparation.Phase]
+						if cfg.Mode == "stop" && req.(*runnersv1.UpdatePreparedWorkloadRequest).GetBind() != nil {
+							stage = "recovered-binding"
+						}
+					case *runnersv1.UpdateVolumeCheckedResponse:
+						if cfg.Mode == "stop" {
+							stage = "recovery-volume"
+						}
+					case *runnerv1.ObserveWorkloadPreparationResponse:
+						result.Binding, stage = proto.Clone(response.Binding).(*runnerv1.WorkloadBinding), "observed"
 					case *runnerv1.PrepareWorkloadResponse:
 						result.Binding, stage = proto.Clone(response.Binding).(*runnerv1.WorkloadBinding), "prepared"
 					case *runnerv1.ActivateWorkloadResponse:
