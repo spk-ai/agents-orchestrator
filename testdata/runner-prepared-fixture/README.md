@@ -7,9 +7,9 @@ whose namespace still prohibits Pod execution.
 
 ## Reproduce
 
-Use matching generated APIs in the reviewed checkouts: API `d6449dd` and
-k8s-runner `6fdcc41` (`feat/prepared-outcome-observation`), and Runners `e7c42f4` (through migration
-`0022`, unchanged). The controller branch is `feat/prepared-outcome-recovery`;
+Use matching generated APIs in the reviewed checkouts: API `6fe4cab` and
+k8s-runner `72a1cc8` (`feat/resource-anchors`), and Runners `e1a3b7f` (through migration
+`0024`). The controller branch is `feat/resource-anchor-controllers`;
 API generation is in
 [`PREPARED-WORKLOADS.md`](../../PREPARED-WORKLOADS.md). These are dependent
 contribution proposals, not stock Agyn releases.
@@ -72,10 +72,18 @@ For both agent-instance and sandbox owners:
   committed state. A new controller observes/removes the exact predecessor
   before a new turn; billing timestamps and pending removal do not release it.
 - A killed unused reservation can abort without fabricating native evidence.
+- Cancellation after complete anchor persistence but before preparation
+  revokes the workload owner and prevents a paused starter from creating a Pod.
+  A following workload uses the existing volume owner for its first PVC.
+- SIGKILL at anchor-removal PENDING and ABSENT retains admission until a fresh
+  controller confirms exact removal. Persistent volume owners survive.
+- Actual inbox threads differ from the registry's legacy instance alias.
+  Both remain unchanged through recovery; native anchors retain the real thread.
 
 Independent `psql` connections compare lifecycle phase/revision, complete native
-binding, removal observation/timestamp and durable owner/backend pins against
-RPC responses. PVC identity/state is compared independently too. The database
+binding, removal observation/timestamp, resource-anchor set, volume reservation
+receipts and durable owner/backend pins against RPC responses. Native ConfigMap
+UIDs and exact Pod/PVC owner references are compared independently too. The database
 itself is not crashed, so this is application-process recovery, not disk-failure
 or node-fencing acceptance.
 
@@ -94,7 +102,7 @@ cross-namespace PVC access, namespace listing and Secret listing. Private
 loopback RPC tokens and allowlists protect the fixture; legacy native startup
 and all streams are denied. These tokens are not production authentication.
 
-The namespace has a deny-network policy, at most four Pods and sixteen 1 MiB
+The namespace has a deny-network policy, at most four Pods and twenty 1 MiB
 PVCs, aggregate CPU/memory quotas, and bounded per-container compute. Workloads
 have no service-account token and their credential-free probes expire after
 three minutes. This fixture does not establish adversarial network enforcement.
@@ -109,6 +117,10 @@ actual native observation RPC; parent-captured bindings independently validate
 its result and are retained solely for bounded fixture cleanup. Process exit failures,
 including race reports, fail acceptance; only joined deliberate SIGKILL exits
 are exempted.
+
+Namespace deletion also removes this fixture's unused anchor metadata and
+retained test PVCs. This is explicit fixture disposal, not production anchored
+volume retirement or proof that an absent anchor excludes delayed child creation.
 
 Full A2A acceptance, initially absent/late-prepare resource recovery, authenticated
 routes, node/storage fencing, legacy adoption, durable credential cleanup and

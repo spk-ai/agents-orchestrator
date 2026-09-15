@@ -152,14 +152,14 @@ func run() error {
 		return err
 	}
 	// Keep the volume-only fixture buildable against its older reviewed APIs.
-	// Prepared mode still requires both actual generated server handlers.
+	// Prepared mode requires the distinct anchored server handlers.
 	preparedRPCs := map[string]bool{}
 	for _, method := range runnersv1.RunnersService_ServiceDesc.Methods {
-		if method.MethodName == "CreatePreparedWorkload" || method.MethodName == "UpdatePreparedWorkload" {
+		if method.MethodName == "CreateAnchoredWorkload" || method.MethodName == "BindWorkloadResourceAnchors" || method.MethodName == "UpdateAnchoredWorkload" {
 			preparedRPCs["/"+runnersv1.RunnersService_ServiceDesc.ServiceName+"/"+method.MethodName] = true
 		}
 	}
-	if cfg.PreparedWorkloads && len(preparedRPCs) != 2 {
+	if cfg.PreparedWorkloads && len(preparedRPCs) != 3 {
 		return fmt.Errorf("reviewed prepared workload RPCs required")
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -257,7 +257,7 @@ func initialize(ctx context.Context, pool *pgxpool.Pool, cfg fixtureConfig, sche
 	}
 	if cfg.PreparedWorkloads {
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations WHERE version IN
-			('0020_legacy_volume_adoption.sql', '0021_volume_backend_identity.sql', '0022_prepared_workloads.sql')`).Scan(&count); err != nil || count != 3 {
+			('0020_legacy_volume_adoption.sql', '0021_volume_backend_identity.sql', '0022_prepared_workloads.sql', '0023_resource_anchors.sql', '0024_resource_anchor_thread_identity.sql')`).Scan(&count); err != nil || count != 5 {
 			return fmt.Errorf("reviewed prepared workload migrations required")
 		}
 	}

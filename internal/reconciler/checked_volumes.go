@@ -3,6 +3,7 @@ package reconciler
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"math/big"
 	"strings"
@@ -49,6 +50,24 @@ func validateCheckedVolume(v *runnersv1.Volume) error {
 		v.VolumeDefinitionId != nil && v.GetVolumeDefinitionId() != v.GetVolumeId() {
 		return checkedVolumeError(v, "identity aliases conflict")
 	}
+	if (v.ResourceAnchor == nil) != (v.AnchorReservation == nil) {
+		return checkedVolumeError(v, "anchor reservation receipt missing or unexpected")
+	}
+	if a := v.ResourceAnchor; a != nil {
+		if v.Status == runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING && (v.BoundInstance != nil || v.LifecycleRevision != 2) {
+			return checkedVolumeError(v, "anchored first provision requires its original unbound generation")
+		}
+		receipt := v.AnchorReservation
+		if !preparedUUID(receipt.WorkloadId) || receipt.PreparationRevision == 0 || receipt.PreparationRevision > math.MaxInt64 ||
+			receipt.ResourceRevision == 0 || receipt.ResourceRevision > math.MaxInt64 || len(receipt.ProtoReflect().GetUnknown()) != 0 ||
+			v.Status != runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING && v.Status != runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE || v.RemovalIntent != nil {
+			return checkedVolumeError(v, "invalid persistent anchor reservation")
+		}
+		w := &runnersv1.Workload{OwnerKind: v.OwnerKind, OwnerId: v.OwnerId, AgentId: v.AgentId, Preparation: &runnersv1.PreparedWorkloadLifecycle{BackendId: a.BackendId}}
+		if err := validateResourceAnchor(w, a, runnerv1.ResourceAnchorKind_RESOURCE_ANCHOR_KIND_VOLUME, v.Meta.Id, a.IdentityLabels["sandbox-owner-id"]); err != nil {
+			return err
+		}
+	}
 	if v.GetBoundInstance() != nil {
 		if err := validateVolumeInstance(v, v.BoundInstance); err != nil {
 			return err
@@ -92,6 +111,18 @@ func validateVolumeInstance(v *runnersv1.Volume, item *runnerv1.VolumeListItem) 
 	if item == nil || !validVolumeValue(item.InstanceId) || !validVolumeValue(item.InstanceUid) || item.VolumeKey != v.GetMeta().GetId() ||
 		!validVolumeValue(item.BackendId) || len(item.BackendId) > 512 {
 		return checkedVolumeError(v, "complete physical identity required")
+	}
+	if !proto.Equal(v.ResourceAnchor, item.Anchor) {
+		return checkedVolumeError(v, "native volume changed its recorded anchor")
+	}
+	if a := v.ResourceAnchor; a != nil {
+		w := &runnersv1.Workload{OwnerKind: v.OwnerKind, OwnerId: v.OwnerId, AgentId: v.AgentId, Preparation: &runnersv1.PreparedWorkloadLifecycle{BackendId: item.BackendId}}
+		if err := validateResourceAnchor(w, a, runnerv1.ResourceAnchorKind_RESOURCE_ANCHOR_KIND_VOLUME, v.GetMeta().GetId(), a.IdentityLabels["sandbox-owner-id"]); err != nil {
+			return err
+		}
+		if !maps.Equal(item.IdentityLabels, a.IdentityLabels) {
+			return checkedVolumeError(v, "native volume anchor owner mismatch")
+		}
 	}
 	labels := item.IdentityLabels
 	if labels["managed-by"] != "agents-orchestrator" || labels["app.kubernetes.io/managed-by"] != "k8s-runner" ||
@@ -156,6 +187,9 @@ func (r *Reconciler) updateCheckedVolume(ctx context.Context, v *runnersv1.Volum
 	if req.GetOperation() == nil || v.LifecycleRevision == math.MaxInt64 {
 		return nil, checkedVolumeError(v, "operation and advanceable revision required")
 	}
+	if v.ResourceAnchor != nil && req.GetBind() == nil {
+		return nil, checkedVolumeError(v, "anchored volume requires a separate retirement contract")
+	}
 	v = proto.Clone(v).(*runnersv1.Volume)
 	req = proto.Clone(req).(*runnersv1.UpdateVolumeCheckedRequest)
 	req.Id, req.ExpectedRevision = v.Meta.Id, v.LifecycleRevision
@@ -170,11 +204,19 @@ func (r *Reconciler) updateCheckedVolume(ctx context.Context, v *runnersv1.Volum
 	if !sameVolumeIdentity(v, next) || next.LifecycleRevision != v.LifecycleRevision+1 {
 		return nil, checkedVolumeError(v, "checked update changed identity or returned the wrong revision")
 	}
+	if req.GetBindAnchor() == nil && (!proto.Equal(v.ResourceAnchor, next.ResourceAnchor) || !proto.Equal(v.AnchorReservation, next.AnchorReservation)) {
+		return nil, checkedVolumeError(v, "checked update changed persistent native ownership")
+	}
 	if req.GetReopen() == nil && !sameVolumeSize(v.SizeGb, next.SizeGb) {
 		return nil, checkedVolumeError(v, "checked update changed size outside an explicit reopen")
 	}
 	valid := false
 	switch op := req.Operation.(type) {
+	case *runnersv1.UpdateVolumeCheckedRequest_BindAnchor:
+		valid = v.ResourceAnchor == nil && v.BoundInstance == nil && next.Status == runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING &&
+			next.BoundInstance == nil && next.RemovalIntent == nil && proto.Equal(next.ResourceAnchor, op.BindAnchor.GetAnchor()) &&
+			proto.Equal(next.AnchorReservation, &runnersv1.VolumeAnchorReservation{WorkloadId: op.BindAnchor.GetWorkloadId(),
+				PreparationRevision: op.BindAnchor.GetExpectedPreparationRevision(), ResourceRevision: op.BindAnchor.GetExpectedAnchorRevision()})
 	case *runnersv1.UpdateVolumeCheckedRequest_Bind:
 		valid = next.Status == runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE && proto.Equal(next.BoundInstance, op.Bind.GetInstance())
 	case *runnersv1.UpdateVolumeCheckedRequest_BeginRemoval:
@@ -211,7 +253,7 @@ func (r *Reconciler) createOrReuseCheckedVolume(ctx context.Context, req *runner
 			return nil, false, err
 		}
 		if !volumeMatchesRequest(v, req) || v.LifecycleRevision != 1 || v.Status != runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING ||
-			v.BoundInstance != nil || v.RemovedAt != nil || !sameVolumeSize(v.SizeGb, req.GetSizeGb()) {
+			v.BoundInstance != nil || v.ResourceAnchor != nil || v.AnchorReservation != nil || v.RemovedAt != nil || !sameVolumeSize(v.SizeGb, req.GetSizeGb()) {
 			return nil, false, checkedVolumeError(v, "create did not return the requested new generation")
 		}
 		return proto.Clone(v).(*runnersv1.Volume), true, nil
