@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1029,49 +1028,36 @@ func TestReconcileAllAgentGroupRolesPatchesMissingDesiredAttrs(t *testing.T) {
 }
 
 func TestGroupMembershipConsumerLoopRetriesWithoutBlocking(t *testing.T) {
-	originalInitial := groupMembershipRetryInitial
-	originalMax := groupMembershipRetryMax
-	groupMembershipRetryInitial = time.Millisecond
-	groupMembershipRetryMax = time.Millisecond
-	defer func() {
-		groupMembershipRetryInitial = originalInitial
-		groupMembershipRetryMax = originalMax
-	}()
-
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	subscription := &fakeGroupMembershipSubscription{}
-	var attempts int32
+	subscription := &fakeGroupMembershipSubscription{unsubscribed: make(chan struct{})}
+	subscribed := make(chan struct{})
+	attempts := 0
 	reconciler := newTestReconciler(Config{})
 	reconciler.StartGroupMembershipConsumerLoopWithSubscriber(ctx, func(context.Context) (groupMembershipSubscription, error) {
-		attempt := atomic.AddInt32(&attempts, 1)
-		if attempt < 2 {
+		attempts++
+		if attempts < 2 {
 			return nil, errors.New("nats unavailable")
 		}
+		close(subscribed)
 		return subscription, nil
 	})
 
-	deadline := time.After(time.Second)
-	for atomic.LoadInt32(&attempts) < 2 {
-		select {
-		case <-deadline:
-			t.Fatalf("expected retry without blocking")
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	select {
+	case <-subscribed:
+	case <-ctx.Done():
+		t.Fatal("expected retry without blocking")
 	}
-	if subscription.unsubscribed {
-		t.Fatalf("did not expect unsubscribe before cancellation")
+	select {
+	case <-subscription.unsubscribed:
+		t.Fatal("did not expect unsubscribe before cancellation")
+	default:
 	}
 	cancel()
-	deadline = time.After(time.Second)
-	for !subscription.unsubscribed {
-		select {
-		case <-deadline:
-			t.Fatalf("expected unsubscribe after cancellation")
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	select {
+	case <-subscription.unsubscribed:
+	case <-time.After(time.Second):
+		t.Fatal("expected unsubscribe after cancellation")
 	}
 }
 
@@ -1971,11 +1957,11 @@ func (f *fakeGroupsClient) ListMemberGroupsBatch(context.Context, *groupsv1.List
 }
 
 type fakeGroupMembershipSubscription struct {
-	unsubscribed bool
+	unsubscribed chan struct{}
 }
 
 func (s *fakeGroupMembershipSubscription) Unsubscribe() error {
-	s.unsubscribed = true
+	close(s.unsubscribed)
 	return nil
 }
 
