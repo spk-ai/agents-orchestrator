@@ -347,7 +347,7 @@ func (d *checkedStackDatabase) assertVolume(t *testing.T, ctx context.Context, c
 		t.Fatal("database probe requires canonical fixture identities")
 	}
 	// psql is an independent connection, not the server's response or pool.
-	query := `SELECT json_build_object('status',status,'revision',lifecycle_revision,'bound',bound_instance,'intent',removal_intent,'owner',owner_id,'runner',runner_id,'organization',organization_id)::text FROM "` + d.config.Schema + `".volumes WHERE id = '` + id + `'`
+	query := `SELECT json_build_object('status',status,'revision',lifecycle_revision,'bound',bound_instance,'intent',removal_intent,'owner',owner_id,'runner',runner_id,'organization',organization_id,'anchor',resource_anchor,'reservation',anchor_reservation,'absence',anchored_removal_observation)::text FROM "` + d.config.Schema + `".volumes WHERE id = '` + id + `'`
 	data, err := checkedStackDocker(ctx, "exec", d.id, "psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "runners_controller_acceptance", "-c", query)
 	if err != nil {
 		t.Fatal("independent volume read failed")
@@ -356,6 +356,7 @@ func (d *checkedStackDatabase) assertVolume(t *testing.T, ctx context.Context, c
 		Status, Owner, Runner, Organization string
 		Revision                            uint64
 		Bound, Intent                       json.RawMessage
+		Anchor, Reservation, Absence        json.RawMessage
 	}
 	if json.Unmarshal(data, &stored) != nil {
 		t.Fatal("independent volume read returned invalid JSON")
@@ -374,6 +375,7 @@ func (d *checkedStackDatabase) assertVolume(t *testing.T, ctx context.Context, c
 		message proto.Message
 	}{
 		{stored.Bound, v.BoundInstance}, {stored.Intent, v.RemovalIntent},
+		{stored.Anchor, v.ResourceAnchor}, {stored.Reservation, v.AnchorReservation}, {stored.Absence, v.AnchoredRemovalObservation},
 	} {
 		if string(value.raw) == "null" {
 			if value.message.ProtoReflect().IsValid() {

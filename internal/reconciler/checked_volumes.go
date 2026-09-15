@@ -60,7 +60,7 @@ func validateCheckedVolume(v *runnersv1.Volume) error {
 		receipt := v.AnchorReservation
 		if !preparedUUID(receipt.WorkloadId) || receipt.PreparationRevision == 0 || receipt.PreparationRevision > math.MaxInt64 ||
 			receipt.ResourceRevision == 0 || receipt.ResourceRevision > math.MaxInt64 || len(receipt.ProtoReflect().GetUnknown()) != 0 ||
-			v.Status != runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING && v.Status != runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE || v.RemovalIntent != nil {
+			v.Status == runnersv1.VolumeStatus_VOLUME_STATUS_FAILED {
 			return checkedVolumeError(v, "invalid persistent anchor reservation")
 		}
 		w := &runnersv1.Workload{OwnerKind: v.OwnerKind, OwnerId: v.OwnerId, AgentId: v.AgentId, Preparation: &runnersv1.PreparedWorkloadLifecycle{BackendId: a.BackendId}}
@@ -104,7 +104,7 @@ func validateCheckedVolume(v *runnersv1.Volume) error {
 	default:
 		return checkedVolumeError(v, "unsupported lifecycle state")
 	}
-	return nil
+	return validateAnchoredVolumeRetirement(v)
 }
 
 func validateVolumeInstance(v *runnersv1.Volume, item *runnerv1.VolumeListItem) error {
@@ -116,6 +116,9 @@ func validateVolumeInstance(v *runnersv1.Volume, item *runnerv1.VolumeListItem) 
 		return checkedVolumeError(v, "native volume changed its recorded anchor")
 	}
 	if a := v.ResourceAnchor; a != nil {
+		if !preparedUUID(item.InstanceUid) || len(item.ProtoReflect().GetUnknown()) != 0 {
+			return checkedVolumeError(v, "anchored volume requires its exact native UID")
+		}
 		w := &runnersv1.Workload{OwnerKind: v.OwnerKind, OwnerId: v.OwnerId, AgentId: v.AgentId, Preparation: &runnersv1.PreparedWorkloadLifecycle{BackendId: item.BackendId}}
 		if err := validateResourceAnchor(w, a, runnerv1.ResourceAnchorKind_RESOURCE_ANCHOR_KIND_VOLUME, v.GetMeta().GetId(), a.IdentityLabels["sandbox-owner-id"]); err != nil {
 			return err
@@ -187,8 +190,11 @@ func (r *Reconciler) updateCheckedVolume(ctx context.Context, v *runnersv1.Volum
 	if req.GetOperation() == nil || v.LifecycleRevision == math.MaxInt64 {
 		return nil, checkedVolumeError(v, "operation and advanceable revision required")
 	}
-	if v.ResourceAnchor != nil && req.GetBind() == nil {
+	if v.ResourceAnchor != nil && req.GetBind() == nil && req.GetBeginAnchoredRemoval() == nil && req.GetConfirmAnchoredRemoval() == nil {
 		return nil, checkedVolumeError(v, "anchored volume requires a separate retirement contract")
+	}
+	if v.ResourceAnchor == nil && (req.GetBeginAnchoredRemoval() != nil || req.GetConfirmAnchoredRemoval() != nil) {
+		return nil, checkedVolumeError(v, "anchored retirement requires persistent ownership")
 	}
 	v = proto.Clone(v).(*runnersv1.Volume)
 	req = proto.Clone(req).(*runnersv1.UpdateVolumeCheckedRequest)
@@ -210,6 +216,9 @@ func (r *Reconciler) updateCheckedVolume(ctx context.Context, v *runnersv1.Volum
 	if req.GetReopen() == nil && !sameVolumeSize(v.SizeGb, next.SizeGb) {
 		return nil, checkedVolumeError(v, "checked update changed size outside an explicit reopen")
 	}
+	if req.GetConfirmAnchoredRemoval() == nil && !proto.Equal(v.AnchoredRemovalObservation, next.AnchoredRemovalObservation) {
+		return nil, checkedVolumeError(v, "checked update changed native retirement evidence")
+	}
 	valid := false
 	switch op := req.Operation.(type) {
 	case *runnersv1.UpdateVolumeCheckedRequest_BindAnchor:
@@ -222,6 +231,18 @@ func (r *Reconciler) updateCheckedVolume(ctx context.Context, v *runnersv1.Volum
 	case *runnersv1.UpdateVolumeCheckedRequest_BeginRemoval:
 		valid = next.Status == runnersv1.VolumeStatus_VOLUME_STATUS_DEPROVISIONING && proto.Equal(next.BoundInstance, v.BoundInstance) &&
 			(v.RemovalIntent == nil || proto.Equal(v.RemovalIntent, next.RemovalIntent))
+	case *runnersv1.UpdateVolumeCheckedRequest_BeginAnchoredRemoval:
+		valid = next.Status == runnersv1.VolumeStatus_VOLUME_STATUS_DEPROVISIONING && next.RemovalIntent.GetAnchored() &&
+			proto.Equal(next.BoundInstance, v.BoundInstance) && (v.RemovalIntent == nil || proto.Equal(v.RemovalIntent, next.RemovalIntent))
+	case *runnersv1.UpdateVolumeCheckedRequest_ConfirmAnchoredRemoval:
+		if v.RemovalIntent != nil && op.ConfirmAnchoredRemoval.GetIntentId() == v.RemovalIntent.Id && next.RemovalIntent != nil {
+			expected := proto.Clone(v.RemovalIntent).(*runnersv1.VolumeRemovalIntent)
+			if expected.ConfirmedAt == nil {
+				expected.ConfirmedAt = next.RemovalIntent.ConfirmedAt
+			}
+			valid = next.Status == runnersv1.VolumeStatus_VOLUME_STATUS_DELETED && proto.Equal(expected, next.RemovalIntent) &&
+				proto.Equal(v.BoundInstance, next.BoundInstance) && proto.Equal(next.AnchoredRemovalObservation, op.ConfirmAnchoredRemoval.Observation)
+		}
 	case *runnersv1.UpdateVolumeCheckedRequest_ConfirmRemoval:
 		if v.RemovalIntent != nil && op.ConfirmRemoval.GetIntentId() == v.RemovalIntent.Id && next.RemovalIntent != nil {
 			expected := proto.Clone(v.RemovalIntent).(*runnersv1.VolumeRemovalIntent)
@@ -318,6 +339,9 @@ func (r *Reconciler) advanceVolumeRemoval(ctx context.Context, runner runnerv1.R
 	}
 	if v.BoundInstance == nil {
 		return false, checkedVolumeError(v, "unbound volume requires provisioning reconciliation before removal")
+	}
+	if v.ResourceAnchor != nil {
+		return r.advanceAnchoredVolumeRemoval(ctx, runner, v)
 	}
 	next, err := r.updateCheckedVolume(ctx, v, &runnersv1.UpdateVolumeCheckedRequest{
 		Operation: &runnersv1.UpdateVolumeCheckedRequest_BeginRemoval{BeginRemoval: &runnersv1.BeginVolumeRemoval{}},

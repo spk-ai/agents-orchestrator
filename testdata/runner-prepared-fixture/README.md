@@ -7,10 +7,11 @@ whose namespace still prohibits Pod execution.
 
 ## Reproduce
 
-Use matching generated APIs in the reviewed checkouts: API `6fe4cab` and
-k8s-runner `72a1cc8` (`feat/resource-anchors`), and Runners `e1a3b7f` (through migration
-`0024`). The controller branch is `feat/resource-anchor-controllers`;
-API generation is in
+Use matching `feat/anchored-volume-removal` checkouts for API, k8s-runner,
+Runners and agents-orchestrator, including registry migration `0025`. The
+parent anchor fixture used API `6fe4cab`, k8s-runner `72a1cc8` and Runners
+`e1a3b7f` through migration `0024`; those alone do not implement this branch's
+retirement contract. API generation is in
 [`PREPARED-WORKLOADS.md`](../../PREPARED-WORKLOADS.md). These are dependent
 contribution proposals, not stock Agyn releases.
 
@@ -121,6 +122,12 @@ are exempted.
 Namespace deletion also removes this fixture's unused anchor metadata and
 retained test PVCs. This is explicit fixture disposal, not production anchored
 volume retirement or proof that an absent anchor excludes delayed child creation.
+
+The separate `TestLiveAnchoredVolumeRetirementStack` selector exercises the
+[explicit retirement contract](../../ANCHORED-VOLUME-RETIREMENT.md), including
+four controller SIGKILL checkpoints per owner kind and registry/native process
+replacement. It verifies native PVC-and-owner absence before registry
+confirmation. It does not substitute namespace deletion for that evidence.
 
 Full A2A acceptance, initially absent/late-prepare resource recovery, authenticated
 routes, node/storage fencing, legacy adoption, durable credential cleanup and

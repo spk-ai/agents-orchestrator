@@ -257,7 +257,7 @@ func initialize(ctx context.Context, pool *pgxpool.Pool, cfg fixtureConfig, sche
 	}
 	if cfg.PreparedWorkloads {
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations WHERE version IN
-			('0020_legacy_volume_adoption.sql', '0021_volume_backend_identity.sql', '0022_prepared_workloads.sql', '0023_resource_anchors.sql', '0024_resource_anchor_thread_identity.sql')`).Scan(&count); err != nil || count != 5 {
+			('0020_legacy_volume_adoption.sql', '0021_volume_backend_identity.sql', '0022_prepared_workloads.sql', '0023_resource_anchors.sql', '0024_resource_anchor_thread_identity.sql', '0025_anchored_volume_removal.sql')`).Scan(&count); err != nil || count != 6 {
 			return fmt.Errorf("reviewed prepared workload migrations required")
 		}
 	}

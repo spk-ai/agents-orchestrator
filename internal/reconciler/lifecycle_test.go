@@ -1585,6 +1585,7 @@ type fakeRunnerClient struct {
 	inspectPreparedWorkload    func(context.Context, *runnerv1.InspectPreparedWorkloadRequest, ...grpc.CallOption) (*runnerv1.InspectPreparedWorkloadResponse, error)
 	removePreparedWorkload     func(context.Context, *runnerv1.RemovePreparedWorkloadRequest, ...grpc.CallOption) (*runnerv1.RemovePreparedWorkloadResponse, error)
 	removeVolumeBound          func(context.Context, *runnerv1.RemoveVolumeBoundRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeBoundResponse, error)
+	removeVolumeAnchored       func(context.Context, *runnerv1.RemoveVolumeAnchoredRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeAnchoredResponse, error)
 	startWorkload              func(context.Context, *runnerv1.StartWorkloadRequest, ...grpc.CallOption) (*runnerv1.StartWorkloadResponse, error)
 	stopWorkload               func(context.Context, *runnerv1.StopWorkloadRequest, ...grpc.CallOption) (*runnerv1.StopWorkloadResponse, error)
 	listWorkloads              func(context.Context, *runnerv1.ListWorkloadsRequest, ...grpc.CallOption) (*runnerv1.ListWorkloadsResponse, error)
@@ -1638,6 +1639,13 @@ func (f *fakeRunnerClient) RemoveVolumeBound(ctx context.Context, req *runnerv1.
 		return f.removeVolumeBound(ctx, req, opts...)
 	}
 	return nil, errNotImplemented
+}
+
+func (f *fakeRunnerClient) RemoveVolumeAnchored(ctx context.Context, req *runnerv1.RemoveVolumeAnchoredRequest, opts ...grpc.CallOption) (*runnerv1.RemoveVolumeAnchoredResponse, error) {
+	if f.removeVolumeAnchored != nil {
+		return f.removeVolumeAnchored(ctx, req, opts...)
+	}
+	return nil, status.Error(codes.Unimplemented, "anchored retirement unavailable")
 }
 
 func (f *fakeRunnerClient) Ready(context.Context, *runnerv1.ReadyRequest, ...grpc.CallOption) (*runnerv1.ReadyResponse, error) {
