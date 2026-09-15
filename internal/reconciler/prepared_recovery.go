@@ -15,6 +15,16 @@ func (r *Reconciler) validateObservedPreparedOwner(ctx context.Context, w *runne
 	expected := map[string]string{"app.kubernetes.io/managed-by": "k8s-runner", "agyn.dev/managed-by": "agents-orchestrator", "managed-by": "agents-orchestrator"}
 	if w.OwnerKind == runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE {
 		expected["agent-instance-id"], expected["agent-id"], expected["thread-id"] = w.OwnerId, w.AgentId, w.ThreadId
+		if resources := w.GetPreparation().GetResources(); resources != nil {
+			thread := labels["thread-id"]
+			if resources.Workload != nil {
+				thread = resources.Workload.IdentityLabels["thread-id"]
+			}
+			if !preparedUUID(thread) {
+				return fmt.Errorf("canonical native inbox thread required")
+			}
+			expected["thread-id"] = thread
+		}
 	} else {
 		if r.agents == nil {
 			return fmt.Errorf("prepared sandbox ownership lookup unavailable")
@@ -88,7 +98,8 @@ func (r *Reconciler) recoverPreparedRemovalBinding(ctx context.Context, runner r
 		if v.Meta.Id != item.VolumeKey || v.OwnerKind != w.OwnerKind || v.OwnerId != w.OwnerId || v.OrganizationId != w.OrganizationId ||
 			v.RunnerId != w.RunnerId || v.AgentId != w.AgentId || v.ThreadId != w.ThreadId || v.RemovalIntent != nil ||
 			v.Status != runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE && v.Status != runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING ||
-			v.BoundInstance != nil && !proto.Equal(v.BoundInstance, item) || v.BoundInstance == nil && v.LifecycleRevision != 1 {
+			v.BoundInstance != nil && !proto.Equal(v.BoundInstance, item) || v.BoundInstance == nil && v.ResourceAnchor == nil && v.LifecycleRevision != 1 ||
+			!proto.Equal(v.ResourceAnchor, workloadVolumeAnchor(w, item.VolumeKey)) {
 			return nil, checkedVolumeError(v, "observed preparation changed the workspace owner, binding or generation")
 		}
 		if err := validateVolumeInstance(v, item); err != nil {

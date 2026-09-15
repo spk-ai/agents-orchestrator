@@ -126,11 +126,13 @@ func run() error {
 			return nil, status.Error(codes.Unauthenticated, "fixture credential required")
 		}
 		switch info.FullMethod {
-		case runnerv1.RunnerService_PrepareWorkload_FullMethodName:
-			if req.(*runnerv1.PrepareWorkloadRequest).GetWorkload().GetLabels()[ownerLabel] != settings.RunID {
+		case runnerv1.RunnerService_PrepareAnchoredWorkload_FullMethodName:
+			if req.(*runnerv1.PrepareAnchoredWorkloadRequest).GetPreparation().GetWorkload().GetLabels()[ownerLabel] != settings.RunID {
 				return nil, status.Error(codes.PermissionDenied, "fixture workload ownership required")
 			}
 		case runnerv1.RunnerService_ListVolumes_FullMethodName,
+			runnerv1.RunnerService_ReserveResourceAnchor_FullMethodName,
+			runnerv1.RunnerService_RemoveWorkloadAnchor_FullMethodName,
 			runnerv1.RunnerService_ObserveWorkloadPreparation_FullMethodName,
 			runnerv1.RunnerService_InspectPreparedWorkload_FullMethodName,
 			runnerv1.RunnerService_ActivateWorkload_FullMethodName,

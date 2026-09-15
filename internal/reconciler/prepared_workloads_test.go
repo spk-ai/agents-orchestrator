@@ -53,7 +53,7 @@ func newPreparedControllerFixture(t *testing.T, sandbox bool) *preparedControlle
 	if sandbox {
 		v.OwnerKind, v.AgentId, v.ThreadId = runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_SANDBOX, "", ""
 	}
-	f := &preparedControllerFixture{t: t, v: v, infos: []assembler.PersistentVolumeInfo{info}, humanOwner: "fixture-sandbox-user"}
+	f := &preparedControllerFixture{t: t, v: v, infos: []assembler.PersistentVolumeInfo{info}, humanOwner: uuid.NewString()}
 	f.metadata = &runnersv1.CreateWorkloadRequest{Id: uuid.NewString(), RunnerId: v.RunnerId, OrganizationId: v.OrganizationId,
 		OwnerKind: v.OwnerKind, OwnerId: v.OwnerId, AgentId: v.AgentId, ThreadId: v.ThreadId, Status: runnersv1.WorkloadStatus_WORKLOAD_STATUS_STARTING}
 	f.request = &runnerv1.StartWorkloadRequest{WorkloadId: f.metadata.Id, Main: &runnerv1.ContainerSpec{Name: "main", Image: "fixture"}, Volumes: []*runnerv1.VolumeSpec{info.Spec}}
@@ -200,6 +200,7 @@ func newPreparedControllerFixture(t *testing.T, sandbox bool) *preparedControlle
 	f.r = &Reconciler{runners: f.registry, agents: &testutil.FakeAgentsClient{GetSandboxFunc: func(context.Context, *agentsv1.GetSandboxRequest, ...grpc.CallOption) (*agentsv1.GetSandboxResponse, error) {
 		return &agentsv1.GetSandboxResponse{Sandbox: &agentsv1.Sandbox{Meta: &agentsv1.EntityMeta{Id: f.v.OwnerId}, OrganizationId: f.v.OrganizationId, OwnerId: f.humanOwner}}, nil
 	}}}
+	f.installAnchoredProtocol()
 	return f
 }
 
@@ -260,6 +261,9 @@ func (f *preparedControllerFixture) transition(_ context.Context, req *runnersv1
 		f.t.Fatalf("unknown fixture operation %T", op)
 	}
 	p.Revision++
+	if p.Resources != nil {
+		p.Resources.Revision++
+	}
 	if p.Phase == runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED {
 		f.w.RemovalConfirmedAt = timestamppb.Now()
 		if f.w.Status != runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED {
@@ -351,6 +355,7 @@ func TestPreparedControllerCancellationDuringPrepare(t *testing.T) {
 				cancel := func() {
 					f.w.Preparation.Phase = runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING
 					f.w.Preparation.Revision++
+					f.w.Preparation.Resources.Revision++
 				}
 				if window == "prepare-reply" {
 					prepare := f.native.prepareWorkload
@@ -387,6 +392,7 @@ func TestPreparedControllerHealthRecoversActivationAcknowledgement(t *testing.T)
 	}
 	f.w.Preparation.Phase = runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_ACTIVATING
 	f.w.Preparation.Revision--
+	f.w.Preparation.Resources.Revision--
 	w := proto.Clone(f.w).(*runnersv1.Workload)
 	if err := f.r.handlePreparedRunnerWorkload(context.Background(), f.native, w); err != nil {
 		t.Fatal(err)
@@ -608,6 +614,7 @@ func TestPreparedControllerUnsafeWorkspacePlan(t *testing.T) {
 				case "other-backend", "missing-bound-pvc", "replaced-bound-pvc":
 					f.v.BoundInstance = checkedTestInstance(f.v, f.infos[0].Spec.PersistentName, uuid.NewString())
 					f.v.InstanceId, f.v.Status, f.v.LifecycleRevision = stringPtr(f.v.BoundInstance.InstanceId), runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE, 2
+					f.seedAnchoredWorkspace()
 					list := f.native.listVolumes
 					f.native.listVolumes = func(ctx context.Context, req *runnerv1.ListVolumesRequest, opts ...grpc.CallOption) (*runnerv1.ListVolumesResponse, error) {
 						response, err := list(ctx, req, opts...)
@@ -725,6 +732,7 @@ func TestPreparedControllerHealthAcknowledgementMustBeDurable(t *testing.T) {
 				case "cancellation":
 					f.w.Preparation.Phase = runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING
 					f.w.Preparation.Revision++
+					f.w.Preparation.Resources.Revision++
 					response.Workload = proto.Clone(f.w).(*runnersv1.Workload)
 				}
 				return response, err
@@ -755,6 +763,7 @@ func TestPreparedControllerCannotConfirmUnknownPreparation(t *testing.T) {
 	previous := proto.Clone(f.w).(*runnersv1.Workload)
 	f.w.Preparation.Phase = runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED
 	f.w.Preparation.Revision++
+	f.w.Preparation.Resources.Revision++
 	f.w.RemovalConfirmedAt = timestamppb.Now()
 	if err := f.r.stopPreparedWorkload(context.Background(), f.native, previous); err == nil {
 		t.Fatal("authorized preparation reclassified as unused")

@@ -76,6 +76,9 @@ func (r *Reconciler) planPreparedStart(ctx context.Context, runner runnerv1.Runn
 			return nil, checkedVolumeError(v, "prepared workload owner or generation mismatch")
 		}
 		if v.BoundInstance != nil {
+			if v.ResourceAnchor == nil {
+				return nil, checkedVolumeError(v, "legacy workspace needs explicit anchor adoption")
+			}
 			if v.BoundInstance.BackendId != inventory.BackendId || v.BoundInstance.InstanceId != spec.PersistentName || !proto.Equal(v.BoundInstance, indexed[v.Meta.Id]) {
 				return nil, checkedVolumeError(v, "bound workspace missing or replaced on selected backend")
 			}
@@ -90,11 +93,21 @@ func (r *Reconciler) planPreparedStart(ctx context.Context, runner runnerv1.Runn
 					fresh = true
 				}
 			}
-			if !fresh || indexed[v.Meta.Id] != nil {
+			if v.ResourceAnchor != nil {
+				if item := indexed[v.Meta.Id]; item != nil {
+					if err := validateVolumeInstance(v, item); err != nil {
+						return nil, err
+					}
+					if item.InstanceId != spec.PersistentName {
+						return nil, checkedVolumeError(v, "anchored workspace name changed")
+					}
+					plan.request.ExpectedVolumes = append(plan.request.ExpectedVolumes, proto.Clone(item).(*runnerv1.VolumeListItem))
+				}
+			} else if !fresh || indexed[v.Meta.Id] != nil {
 				return nil, checkedVolumeError(v, "unbound workspace requires explicit reconciliation")
 			}
 			for _, item := range inventory.Volumes {
-				if item.InstanceId == spec.PersistentName {
+				if item.InstanceId == spec.PersistentName && item.VolumeKey != v.Meta.Id {
 					return nil, checkedVolumeError(v, "first-provision name already exists")
 				}
 			}
@@ -113,7 +126,7 @@ func preparedMetadata(metadata *runnersv1.CreateWorkloadRequest, plan *preparedS
 		ZitiIdentityId: metadata.ZitiIdentityId, Status: metadata.Status, AllocatedCpuMillicores: metadata.AllocatedCpuMillicores,
 		AllocatedRamBytes: metadata.AllocatedRamBytes, Flavor: metadata.Flavor, PersistentShells: metadata.PersistentShells,
 		Preparation: &runnersv1.PreparedWorkloadLifecycle{Phase: runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_RESERVED,
-			Revision: 1, BackendId: plan.request.BackendId, VolumeIds: slices.Clone(plan.ids)}}
+			Revision: 1, BackendId: plan.request.BackendId, VolumeIds: slices.Clone(plan.ids), Resources: &runnersv1.WorkloadResourceAnchors{Revision: 1}}}
 }
 
 func (r *Reconciler) persistPreparedVolumes(ctx context.Context, plan *preparedStartPlan, binding *runnerv1.WorkloadBinding) error {
@@ -128,6 +141,7 @@ func (r *Reconciler) persistPreparedVolumes(ctx context.Context, plan *preparedS
 			return err
 		}
 		if !sameVolumeIdentity(expected, v) || !sameVolumeSize(expected.SizeGb, v.SizeGb) || v.LifecycleRevision < expected.LifecycleRevision ||
+			!proto.Equal(v.ResourceAnchor, expected.ResourceAnchor) || !proto.Equal(v.AnchorReservation, expected.AnchorReservation) ||
 			v.RemovalIntent != nil || v.BoundInstance != nil && !proto.Equal(v.BoundInstance, item) {
 			return checkedVolumeError(v, "workspace changed during preparation")
 		}
@@ -202,7 +216,7 @@ func (r *Reconciler) startPreparedWorkload(ctx context.Context, runner runnerv1.
 		return nil, err
 	}
 	registryAttempted = true
-	response, err := r.runners.CreatePreparedWorkload(ctx, &runnersv1.CreatePreparedWorkloadRequest{Workload: metadata, BackendId: plan.request.BackendId, VolumeIds: plan.ids})
+	response, err := r.runners.CreateAnchoredWorkload(ctx, &runnersv1.CreateAnchoredWorkloadRequest{Preparation: &runnersv1.CreatePreparedWorkloadRequest{Workload: metadata, BackendId: plan.request.BackendId, VolumeIds: plan.ids}})
 	if err != nil {
 		return nil, err
 	}
@@ -214,6 +228,11 @@ func (r *Reconciler) startPreparedWorkload(ctx context.Context, runner runnerv1.
 		return nil, fmt.Errorf("registry did not reserve the requested prepared workload")
 	}
 	owned = proto.Clone(w).(*runnersv1.Workload)
+	w, err = r.reservePreparedAnchors(ctx, runner, owned, plan)
+	if err != nil {
+		return nil, err
+	}
+	owned = w
 	w, err = r.updatePreparedWorkload(ctx, owned, &runnersv1.UpdatePreparedWorkloadRequest{Operation: &runnersv1.UpdatePreparedWorkloadRequest_BeginPreparation{BeginPreparation: &runnersv1.BeginWorkloadPreparation{}}}, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_PREPARING)
 	if err != nil {
 		return nil, err
@@ -222,7 +241,8 @@ func (r *Reconciler) startPreparedWorkload(ctx context.Context, runner runnerv1.
 	if w.Status != runnersv1.WorkloadStatus_WORKLOAD_STATUS_STARTING {
 		return nil, fmt.Errorf("preparation canceled before native dispatch")
 	}
-	prepared, err := runner.PrepareWorkload(ctx, plan.request)
+	prepared, err := runner.PrepareAnchoredWorkload(ctx, &runnerv1.PrepareAnchoredWorkloadRequest{Preparation: plan.request,
+		WorkloadAnchor: proto.Clone(w.Preparation.Resources.Workload).(*runnerv1.ResourceAnchor), VolumeAnchors: w.Preparation.Resources.Volumes})
 	if err != nil {
 		return nil, err
 	}

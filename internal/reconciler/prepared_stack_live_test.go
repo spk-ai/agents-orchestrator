@@ -113,6 +113,7 @@ func (f *preparedStackNamespace) absent(t *testing.T, ctx context.Context, b *ru
 		if err != nil || string(claim.UID) != v.InstanceUid || claim.DeletionTimestamp != nil {
 			t.Fatal("idle workspace not retained")
 		}
+		f.anchor(t, ctx, v.Anchor)
 		for _, hold := range claim.Finalizers {
 			if hold == "agyn.io/workload-"+b.InstanceUid {
 				t.Fatal("absent Pod retained its workspace hold")
@@ -125,9 +126,11 @@ func assertPreparedNoRedispatch(t *testing.T, result preparedControllerResult) {
 	t.Helper()
 	for _, op := range result.Operations {
 		switch op.Operation {
-		case runnerv1.RunnerService_PrepareWorkload_FullMethodName, runnerv1.RunnerService_ActivateWorkload_FullMethodName,
+		case runnerv1.RunnerService_PrepareWorkload_FullMethodName, runnerv1.RunnerService_PrepareAnchoredWorkload_FullMethodName,
+			runnerv1.RunnerService_ReserveResourceAnchor_FullMethodName, runnerv1.RunnerService_ActivateWorkload_FullMethodName,
 			runnerv1.RunnerService_StartWorkload_FullMethodName, runnersv1.RunnersService_CreateWorkload_FullMethodName,
-			runnersv1.RunnersService_CreatePreparedWorkload_FullMethodName:
+			runnersv1.RunnersService_CreatePreparedWorkload_FullMethodName, runnersv1.RunnersService_CreateAnchoredWorkload_FullMethodName,
+			runnersv1.RunnersService_BindWorkloadResourceAnchors_FullMethodName:
 			t.Fatalf("recovery redispatched execution: %s", op.Operation)
 		}
 	}
@@ -165,8 +168,8 @@ func TestLivePreparedExecutionStack(t *testing.T) {
 			newConfig := func() preparedControllerConfig {
 				owner := uuid.NewString()
 				return preparedControllerConfig{RegistryAddress: registry.address, RegistryToken: database.config.Token, RunnerAddress: nativeAddress, RunnerToken: live.token,
-					RunnerID: database.config.RunnerID, OrganizationID: database.config.OrganizationID, OwnerID: owner, ThreadID: owner, AgentID: agentID, DefinitionID: definitionID,
-					WorkloadID: uuid.NewString(), RunID: live.run, Image: os.Getenv("PREPARED_NODE_IMAGE"), Mode: "start", Turn: 1, Sandbox: sandbox}
+					RunnerID: database.config.RunnerID, OrganizationID: database.config.OrganizationID, OwnerID: owner, ThreadID: uuid.NewString(), AgentID: agentID, DefinitionID: definitionID,
+					WorkloadID: uuid.NewString(), HumanOwnerID: uuid.NewString(), RunID: live.run, Image: os.Getenv("PREPARED_NODE_IMAGE"), Mode: "start", Turn: 1, Sandbox: sandbox}
 			}
 			state := func(t *testing.T, cfg preparedControllerConfig, phase runnersv1.PreparedWorkloadPhase) *runnersv1.Workload {
 				t.Helper()
@@ -187,6 +190,9 @@ func TestLivePreparedExecutionStack(t *testing.T) {
 					t.Fatalf("prepared controller failed code=%s operations=%+v", result.ErrorCode, result.Operations)
 				}
 				if cfg.Mode == "start" {
+					if !cfg.Sandbox && (cfg.ThreadID == cfg.OwnerID || result.Workload.ThreadId != cfg.OwnerID || result.Workload.Preparation.Resources.Workload.IdentityLabels["thread-id"] != cfg.ThreadID) {
+						t.Fatal("registry instance alias replaced the native inbox thread")
+					}
 					live.track(t, ctx, result.Workload.GetPreparation().GetBinding())
 				} else {
 					assertPreparedNoRedispatch(t, result)
@@ -202,6 +208,7 @@ func TestLivePreparedExecutionStack(t *testing.T) {
 					t.Fatal("exact persisted removal missing")
 				}
 				live.absent(t, ctx, b)
+				live.anchorAbsent(t, ctx, b.Anchor)
 				v := database.assertVolume(t, ctx, registry.client, b.Volumes[0].VolumeKey)
 				if v.Status != runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE || !proto.Equal(v.BoundInstance, b.Volumes[0]) {
 					t.Fatal("retirement changed durable workspace identity")
@@ -211,7 +218,7 @@ func TestLivePreparedExecutionStack(t *testing.T) {
 				t.Helper()
 				cfg.WorkloadID = uuid.NewString()
 				metadata, _, infos := cfg.request()
-				_, err := registry.client.CreatePreparedWorkload(ctx, &runnersv1.CreatePreparedWorkloadRequest{Workload: metadata, BackendId: "kubernetes-namespace/v1/" + live.ns.Name + "/" + string(live.ns.UID), VolumeIds: []string{infos[0].Key()}})
+				_, err := registry.client.CreateAnchoredWorkload(ctx, &runnersv1.CreateAnchoredWorkloadRequest{Preparation: &runnersv1.CreatePreparedWorkloadRequest{Workload: metadata, BackendId: "kubernetes-namespace/v1/" + live.ns.Name + "/" + string(live.ns.UID), VolumeIds: []string{infos[0].Key()}}})
 				if status.Code(err) != codes.FailedPrecondition {
 					t.Fatalf("same-owner admission not held: %v", err)
 				}
@@ -466,7 +473,7 @@ func TestLivePreparedExecutionStack(t *testing.T) {
 				blocked(t, cfg)
 				t.Log("NotFound retained unbound removal admission; no native cleanup or restart authority inferred")
 			})
-			for _, stage := range []string{"removing", "native-absent", "removed"} {
+			for _, stage := range []string{"removing", "native-absent", "anchor-pending", "anchor-absent", "removed"} {
 				t.Run("removal-crash-"+stage, func(t *testing.T) {
 					cfg := newConfig()
 					binding := run(t, cfg).Workload.Preparation.Binding
@@ -509,6 +516,49 @@ func TestLivePreparedExecutionStack(t *testing.T) {
 					t.Fatal("unused reservation invented native evidence")
 				}
 			})
+			t.Run("cancel-before-preparation-authority", func(t *testing.T) {
+				cfg := newConfig()
+				cfg.Barrier = "anchors-bound"
+				starter := startPreparedController(t, cfg)
+				starter.awaitBarrier(t, ctx)
+				reserved := state(t, cfg, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_RESERVED)
+				for _, a := range append([]*runnerv1.ResourceAnchor{reserved.Preparation.Resources.Workload}, reserved.Preparation.Resources.Volumes...) {
+					live.anchor(t, ctx, a)
+				}
+				if _, err := live.kube.CoreV1().Pods(live.ns.Name).Get(ctx, "workload-"+cfg.WorkloadID, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+					t.Fatal("native Pod preceded preparation authority")
+				}
+				cancelCfg := cfg
+				cancelCfg.Mode = "stop"
+				run(t, cancelCfg)
+				removed := state(t, cfg, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED)
+				if removed.Preparation.Binding != nil || removed.RemovalConfirmedAt == nil {
+					t.Fatal("unused anchored reservation fabricated a Pod receipt")
+				}
+				live.anchorAbsent(t, ctx, reserved.Preparation.Resources.Workload)
+				starter.release(t)
+				result := starter.finish(t, ctx)
+				if !result.Error {
+					t.Fatal("canceled reservation still started")
+				}
+				assertPreparedNoNativePreparation(t, result)
+				cfg.WorkloadID, cfg.Barrier = uuid.NewString(), ""
+				binding := run(t, cfg).Workload.Preparation.Binding
+				if !proto.Equal(binding.Volumes[0].Anchor, reserved.Preparation.Resources.Volumes[0]) {
+					t.Fatal("first PVC did not reuse the durable volume owner")
+				}
+				live.probe(t, ctx, cfg, binding, 0)
+				stop(t, cfg, binding)
+			})
 		})
+	}
+}
+
+func assertPreparedNoNativePreparation(t *testing.T, result preparedControllerResult) {
+	t.Helper()
+	for _, op := range result.Operations {
+		if op.Operation == runnerv1.RunnerService_PrepareAnchoredWorkload_FullMethodName || op.Operation == runnerv1.RunnerService_PrepareWorkload_FullMethodName || op.Operation == runnerv1.RunnerService_ActivateWorkload_FullMethodName {
+			t.Fatalf("canceled reservation dispatched native preparation: %s", op.Operation)
+		}
 	}
 }

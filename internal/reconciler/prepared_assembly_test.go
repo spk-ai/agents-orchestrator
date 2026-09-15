@@ -28,7 +28,7 @@ func preparedAgentAssemblyFixture(t *testing.T, ziti bool) (*preparedControllerF
 	t.Helper()
 	f := newPreparedControllerFixture(t, false)
 	f.infos, f.created, f.request.Volumes = nil, nil, nil
-	target := AgentInstanceTarget{AgentID: uuid.MustParse(f.v.AgentId), AgentInstanceID: uuid.MustParse(f.v.OwnerId)}
+	target := AgentInstanceTarget{AgentID: uuid.MustParse(f.v.AgentId), AgentInstanceID: uuid.MustParse(f.v.OwnerId), ThreadID: uuid.New()}
 	f.registry.listRunners = func(context.Context, *runnersv1.ListRunnersRequest, ...grpc.CallOption) (*runnersv1.ListRunnersResponse, error) {
 		return &runnersv1.ListRunnersResponse{Runners: []*runnersv1.Runner{buildRunner(f.v.RunnerId)}}, nil
 	}

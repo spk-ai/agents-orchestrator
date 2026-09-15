@@ -1,5 +1,11 @@
 # Prepared Workload Controllers
 
+This branch now contains the dependent [resource-anchor controller integration](RESOURCE-ANCHORS.md).
+The preparation-recovery lifecycle below describes its base. New starts require
+the newer API/native/registry revisions in that report, including registry
+migrations through `0024`; the old reproduction combination below is not a
+substitute for those dependencies.
+
 Dependent preparation-recovery follow-up on `754e935`, requiring the prepared
 registry (`spk-ai/runners` `e7c42f4`, unchanged) and the API/native runner proposals
 `feat/prepared-outcome-observation`. This is a source proposal, not a published

@@ -26,6 +26,9 @@ type agentsClient interface {
 }
 
 type runnersClient interface {
+	CreateAnchoredWorkload(context.Context, *runnersv1.CreateAnchoredWorkloadRequest, ...grpc.CallOption) (*runnersv1.CreateAnchoredWorkloadResponse, error)
+	BindWorkloadResourceAnchors(context.Context, *runnersv1.BindWorkloadResourceAnchorsRequest, ...grpc.CallOption) (*runnersv1.BindWorkloadResourceAnchorsResponse, error)
+	UpdateAnchoredWorkload(context.Context, *runnersv1.UpdateAnchoredWorkloadRequest, ...grpc.CallOption) (*runnersv1.UpdateAnchoredWorkloadResponse, error)
 	CreatePreparedWorkload(context.Context, *runnersv1.CreatePreparedWorkloadRequest, ...grpc.CallOption) (*runnersv1.CreatePreparedWorkloadResponse, error)
 	GetWorkload(context.Context, *runnersv1.GetWorkloadRequest, ...grpc.CallOption) (*runnersv1.GetWorkloadResponse, error)
 	UpdatePreparedWorkload(context.Context, *runnersv1.UpdatePreparedWorkloadRequest, ...grpc.CallOption) (*runnersv1.UpdatePreparedWorkloadResponse, error)
