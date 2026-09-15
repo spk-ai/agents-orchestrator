@@ -1,5 +1,25 @@
 # Prepared Workload Controllers
 
+## Lab Combination
+
+This `lab/prepared-recovery-native-dns` checkout combines retained prepared/DNS
+source `c932293` with recovery source/unit `5d8a9c8` and process acceptance
+`c2bb0e5` (cherry-picked as `ee98e50` and `a5eadd7`). The focused proposal below
+describes its separate review boundary; this lab branch includes the DNS fix.
+It is not an installed image or a bundled upstream proposal.
+
+Build and vet excluding the known `assign` failure pass. The selected full race
+suite passes 666 entries with five gated skips and exactly the known
+group-consumer test excluded. A real PostgreSQL/Kubernetes/process subset passes
+four recovery scenarios plus both owner groups and parent (seven entries), with
+no failures/skips: lost preparation across replacement of all three application
+processes and overlapping stale-observer recovery, for each owner kind. This
+subset verifies compatibility of the combined source, not a full A2A/native-agent
+or production DNS rollout. All installed deployment/storage snapshots remain
+unchanged; coordinated rollout and the remaining production gates are open.
+
+## Focused Proposal
+
 Dependent preparation-recovery follow-up on `754e935`, requiring the prepared
 registry (`spk-ai/runners` `e7c42f4`, unchanged) and the API/native runner proposals
 `feat/prepared-outcome-observation`. This is a source proposal, not a published
