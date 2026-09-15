@@ -205,10 +205,14 @@ func (r *Reconciler) stopPreparedWorkload(ctx context.Context, runner runnerv1.R
 		return err
 	}
 	reflectPreparedWorkload(previous, w)
-	if w.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED {
-		if w.Preparation.Binding == nil {
-			return fmt.Errorf("workload %s preparation outcome unknown; admission retained", w.Meta.Id)
+	if w.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED && w.Preparation.Binding == nil {
+		w, err = r.recoverPreparedRemovalBinding(ctx, runner, w)
+		if err != nil {
+			return err
 		}
+		reflectPreparedWorkload(previous, w)
+	}
+	if w.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED {
 		response, err := runner.RemovePreparedWorkload(ctx, &runnerv1.RemovePreparedWorkloadRequest{Expected: proto.Clone(w.Preparation.Binding).(*runnerv1.WorkloadBinding)})
 		if err != nil {
 			return err
