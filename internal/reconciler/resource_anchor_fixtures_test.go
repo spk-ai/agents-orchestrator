@@ -12,6 +12,20 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func (f *fakeRunnerClient) RevokeWorkloadPreparation(ctx context.Context, req *runnerv1.RevokeWorkloadPreparationRequest, opts ...grpc.CallOption) (*runnerv1.RevokeWorkloadPreparationResponse, error) {
+	if f.revokeWorkloadPreparation != nil {
+		return f.revokeWorkloadPreparation(ctx, req, opts...)
+	}
+	return nil, status.Error(codes.Unimplemented, "preparation revocation unavailable")
+}
+
+func (f *fakeRunnerClient) ObservePreparationRevocation(ctx context.Context, req *runnerv1.ObservePreparationRevocationRequest, opts ...grpc.CallOption) (*runnerv1.ObservePreparationRevocationResponse, error) {
+	if f.observePreparationRevocation != nil {
+		return f.observePreparationRevocation(ctx, req, opts...)
+	}
+	return nil, status.Error(codes.Unimplemented, "preparation revocation observation unavailable")
+}
+
 func (f *fakeRunnersClient) CreateAnchoredWorkload(ctx context.Context, req *runnersv1.CreateAnchoredWorkloadRequest, opts ...grpc.CallOption) (*runnersv1.CreateAnchoredWorkloadResponse, error) {
 	if f.createAnchoredWorkload != nil {
 		return f.createAnchoredWorkload(ctx, req, opts...)

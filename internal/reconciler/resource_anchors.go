@@ -77,7 +77,7 @@ func validateWorkloadAnchors(w *runnersv1.Workload) error {
 		return fmt.Errorf("valid resource revision required")
 	}
 	if a.Workload == nil {
-		if len(a.Volumes) != 0 || p.Binding != nil || p.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_RESERVED && p.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED {
+		if len(a.Volumes) != 0 || p.Binding != nil || a.PreparationRevocation != nil || a.RevocationObservation != nil || p.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_RESERVED && p.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED {
 			return fmt.Errorf("resource anchors must precede preparation authority")
 		}
 		return nil
@@ -111,7 +111,7 @@ func validateWorkloadAnchors(w *runnersv1.Workload) error {
 			}
 		}
 	}
-	return nil
+	return validatePreparationRevocation(w)
 }
 
 func sameResourceOwners(a, b *runnersv1.WorkloadResourceAnchors) bool {
@@ -120,6 +120,8 @@ func sameResourceOwners(a, b *runnersv1.WorkloadResourceAnchors) bool {
 	}
 	a, b = proto.Clone(a).(*runnersv1.WorkloadResourceAnchors), proto.Clone(b).(*runnersv1.WorkloadResourceAnchors)
 	a.Revision, b.Revision = 0, 0
+	a.PreparationRevocation, b.PreparationRevocation = nil, nil
+	a.RevocationObservation, b.RevocationObservation = nil, nil
 	less := func(a, b *runnerv1.ResourceAnchor) int {
 		if a.ResourceId < b.ResourceId {
 			return -1
@@ -144,6 +146,22 @@ func validateAnchorSuccessor(previous, next *runnersv1.Workload) error {
 	}
 	if b.Revision < a.Revision || a.Workload != nil && !sameResourceOwners(a, b) {
 		return fmt.Errorf("immutable resource identity or revision changed")
+	}
+	if a.PreparationRevocation != nil && !proto.Equal(a.PreparationRevocation, b.PreparationRevocation) ||
+		a.RevocationObservation != nil && !proto.Equal(a.RevocationObservation, b.RevocationObservation) ||
+		(b.Revision == a.Revision || previous.Preparation.Phase == runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED) &&
+			(!proto.Equal(a.PreparationRevocation, b.PreparationRevocation) || !proto.Equal(a.RevocationObservation, b.RevocationObservation)) {
+		return fmt.Errorf("immutable preparation revocation changed or lacks a revision")
+	}
+	revocationWrites := uint64(0)
+	if a.PreparationRevocation == nil && b.PreparationRevocation != nil {
+		revocationWrites++
+	}
+	if a.RevocationObservation == nil && b.RevocationObservation != nil {
+		revocationWrites++
+	}
+	if next.Preparation.Revision-previous.Preparation.Revision < revocationWrites {
+		return fmt.Errorf("revocation proof and observation require separate durable writes")
 	}
 	metadataBindings := uint64(0)
 	if a.Workload == nil && b.Workload != nil {

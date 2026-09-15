@@ -318,6 +318,11 @@ func TestResourceAnchorLostRepliesDoNotRedispatch(t *testing.T) {
 					}
 				}
 				revocations := 0
+				preparationRevocations := 0
+				f.native.revokeWorkloadPreparation = func(context.Context, *runnerv1.RevokeWorkloadPreparationRequest, ...grpc.CallOption) (*runnerv1.RevokeWorkloadPreparationResponse, error) {
+					preparationRevocations++
+					return nil, status.Error(codes.Unimplemented, "revocation proof unavailable")
+				}
 				revoke := f.native.removeWorkloadAnchor
 				f.native.removeWorkloadAnchor = func(ctx context.Context, req *runnerv1.RemoveWorkloadAnchorRequest, opts ...grpc.CallOption) (*runnerv1.RemoveWorkloadAnchorResponse, error) {
 					revocations++
@@ -327,8 +332,8 @@ func TestResourceAnchorLostRepliesDoNotRedispatch(t *testing.T) {
 					t.Fatal("ambiguous reply activated or repeated execution")
 				}
 				if boundary == "begin-prepare" || boundary == "prepare" {
-					if f.w.RemovalConfirmedAt != nil || f.w.Preparation.Binding != nil || revocations != 1 {
-						t.Fatal("unknown preparation did not revoke ownership while retaining admission")
+					if f.w.RemovalConfirmedAt != nil || f.w.Preparation.Binding != nil || revocations != 0 || preparationRevocations != 1 {
+						t.Fatal("unknown preparation erased its native owner without a revocation proof or released admission")
 					}
 					if err := f.r.stopPreparedWorkload(context.Background(), f.native, f.w); err == nil || f.w.RemovalConfirmedAt != nil || f.prepares > 1 {
 						t.Fatal("owner absence incorrectly proved child cleanup")

@@ -172,6 +172,9 @@ func (r *Reconciler) persistPreparedBinding(ctx context.Context, previous *runne
 			}
 			return w, nil
 		}
+		if w.Preparation.Resources.GetPreparationRevocation() != nil {
+			return nil, fmt.Errorf("revoked preparation cannot accept a late binding")
+		}
 		phase := w.Preparation.Phase
 		if phase == runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_PREPARING {
 			phase = runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_BOUND

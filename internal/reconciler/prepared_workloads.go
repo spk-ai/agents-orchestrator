@@ -2,7 +2,6 @@ package reconciler
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -159,7 +158,8 @@ func validatePreparedSuccessor(previous, w *runnersv1.Workload) error {
 		}
 	}
 	if w.Preparation.Phase == runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED && w.Preparation.Binding == nil &&
-		previous.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_RESERVED && previous.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED {
+		previous.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_RESERVED && previous.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED &&
+		w.Preparation.Resources.GetRevocationObservation() == nil {
 		return fmt.Errorf("authorized preparation cannot become an unused reservation")
 	}
 	return nil
@@ -179,7 +179,34 @@ func (r *Reconciler) updatePreparedWorkload(ctx context.Context, w *runnersv1.Wo
 	request = proto.Clone(request).(*runnersv1.UpdatePreparedWorkloadRequest)
 	expectedBinding := w.Preparation.Binding
 	if request.GetBind() != nil {
+		if w.Preparation.Resources.GetPreparationRevocation() != nil {
+			return nil, fmt.Errorf("revoked preparation cannot accept a Pod binding")
+		}
 		expectedBinding = request.GetBind().GetBinding()
+	}
+	expectedProof := w.Preparation.Resources.GetPreparationRevocation()
+	expectedObservation := w.Preparation.Resources.GetRevocationObservation()
+	if op := request.GetRecordRevocation(); op != nil {
+		if w.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING || expectedProof != nil || expectedObservation != nil || w.Preparation.Binding != nil || len(op.ProtoReflect().GetUnknown()) != 0 {
+			return nil, fmt.Errorf("unbound removal without an earlier revocation required")
+		}
+		var err error
+		expectedProof, err = canonicalPreparationRevocation(w, op.Revocation)
+		if err != nil {
+			return nil, err
+		}
+		op.Revocation = expectedProof
+	}
+	if op := request.GetConfirmRevocation(); op != nil {
+		if w.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING || expectedProof == nil || expectedObservation != nil || len(op.ProtoReflect().GetUnknown()) != 0 {
+			return nil, fmt.Errorf("persisted revocation without an earlier confirmation required")
+		}
+		var err error
+		expectedObservation, err = canonicalRevocationObservation(w, op.Observation)
+		if err != nil {
+			return nil, err
+		}
+		op.Observation = expectedObservation
 	}
 	request.Id, request.ExpectedRevision = w.Meta.Id, w.Preparation.Revision
 	var next *runnersv1.Workload
@@ -200,7 +227,8 @@ func (r *Reconciler) updatePreparedWorkload(ctx context.Context, w *runnersv1.Wo
 		return nil, err
 	}
 	if !samePreparedIdentity(w, next) || next.Preparation.Revision != w.Preparation.Revision+1 || next.Preparation.Phase != phase ||
-		!samePreparedBinding(expectedBinding, next.Preparation.Binding) {
+		!samePreparedBinding(expectedBinding, next.Preparation.Binding) ||
+		!proto.Equal(expectedProof, next.Preparation.Resources.GetPreparationRevocation()) || !proto.Equal(expectedObservation, next.Preparation.Resources.GetRevocationObservation()) {
 		return nil, fmt.Errorf("prepared transition was not persisted as requested")
 	}
 	return proto.Clone(next).(*runnersv1.Workload), nil
@@ -231,11 +259,15 @@ func (r *Reconciler) stopPreparedWorkload(ctx context.Context, runner runnerv1.R
 	}
 	reflectPreparedWorkload(previous, w)
 	if w.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED && w.Preparation.Binding == nil {
-		recovered, recoverErr := r.recoverPreparedRemovalBinding(ctx, runner, w)
+		var recovered *runnersv1.Workload
+		var recoverErr error
+		if w.Preparation.Resources.GetPreparationRevocation() != nil {
+			recovered, recoverErr = r.recoverRevokedPreparation(ctx, runner, w)
+		} else {
+			recovered, recoverErr = r.recoverPreparedRemovalBinding(ctx, runner, w)
+		}
 		if recoverErr != nil {
-			// Revocation excludes execution by late creates, but cannot itself
-			// prove child cleanup or release this unknown preparation's admission.
-			return errors.Join(recoverErr, revokePreparedAnchor(ctx, runner, w))
+			return recoverErr
 		}
 		w = recovered
 		reflectPreparedWorkload(previous, w)

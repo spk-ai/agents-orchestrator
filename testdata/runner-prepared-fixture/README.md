@@ -7,8 +7,10 @@ whose namespace still prohibits Pod execution.
 
 ## Reproduce
 
-Use matching `feat/anchored-volume-removal` checkouts for API, k8s-runner,
-Runners and agents-orchestrator, including registry migration `0025`. The
+Use matching `feat/preparation-revocation` checkouts for API, k8s-runner,
+Runners and agents-orchestrator, including registry migration `0026`. The
+revocation dependencies are API `23d3073`, native runner `3260fb4` and registry
+`302b7c8`. The preceding anchored-retirement branch used migration `0025`. The
 parent anchor fixture used API `6fe4cab`, k8s-runner `72a1cc8` and Runners
 `e1a3b7f` through migration `0024`; those alone do not implement this branch's
 retirement contract. API generation is in
@@ -29,7 +31,7 @@ PREPARED_RUNNER_CHART="$RUNNER_CHECKOUT/charts/k8s-runner/values.yaml" \
 CHECKED_POSTGRES_IMAGE="$POSTGRES_IMAGE" \
 PREPARED_NODE_IMAGE="$NODE_IMAGE" \
 go test -race -vet=off -json ./internal/reconciler \
-  -run '^TestLivePreparedExecutionStack$' -count=1 -timeout=30m
+  -run '^TestLivePreparedExecutionStack$' -count=1 -timeout=40m
 ```
 
 Both images must be reviewed digest-pinned references. PostgreSQL must already
@@ -67,8 +69,9 @@ For both agent-instance and sandbox owners:
 - Overlapping controller processes converge on the same removal: a paused stale
   observer accepts another controller's durable confirmation without repeating
   removal. The next turn uses the same PVC and verifies no earlier execution.
-- A killed PREPARING caller with no native Pod retains admission on NotFound.
-  The fixture does not turn that observation into late-create fencing.
+- A killed PREPARING caller with no native Pod requires a durable native
+  revocation and a separately persisted cleanup observation. NotFound alone
+  still retains admission, and the receipt does not establish future-write fencing.
 - SIGKILL after removal intent, native ABSENT and registry confirmation preserves
   committed state. A new controller observes/removes the exact predecessor
   before a new turn; billing timestamps and pending removal do not release it.
@@ -87,6 +90,34 @@ receipts and durable owner/backend pins against RPC responses. Native ConfigMap
 UIDs and exact Pod/PVC owner references are compared independently too. The database
 itself is not crashed, so this is application-process recovery, not disk-failure
 or node-fencing acceptance.
+
+## Unbound Revocation Recovery
+
+With the same fixture environment, run:
+
+```sh
+go test -race -json ./internal/reconciler \
+  -run '^TestLivePreparationRevocationStack$' -count=1 -timeout=18m
+```
+
+For both owner kinds, the controller is killed before first native preparation.
+Recovery then stops after the native revocation reply, registry proof commit,
+native absence observation or registry cleanup confirmation. The controller,
+registry and native runner are all killed and replaced at each checkpoint.
+Independent SQL/ConfigMap reads verify the same revocation record and separate
+admission/cleanup transitions, without a fabricated Pod binding.
+
+Each checkpoint runs with and without a late fixture PVC created under the
+original volume owner. Fresh recovery binds a discovered UID before confirmation;
+when confirmation already happened, the explicit next turn discovers and reuses
+that exact workspace. The program verifies that the canceled attempt left no
+workspace effects. An independent peer's heartbeat advances across process
+replacement; its bounded probe uses an explicit second turn between groups.
+
+Those PVCs are explicit Kubernetes fixture CREATEs, not a claim to simulate a
+previously admitted API request. The native runner's separate delayed-CREATE
+tests cover that boundary. No task/provider request is retried by these recovery
+paths. Retained journals are identity-checked before fixture cleanup.
 
 ## Boundaries And Cleanup
 
