@@ -1,5 +1,12 @@
 # Agents Orchestrator Service
 
+The `sync/2026-09-24-revocation` branch rebases the contribution stack onto
+upstream `c88b608`. Use API `spk-ai/api` `c21440b`, the matching
+`spk-ai/k8s-runner` `sync/2026-09-24-volume-adoption` branch, and registry
+`spk-ai/runners` `302b7c8`. Earlier revisions below are historical records.
+The new native adoption methods remain unavailable in workload test doubles;
+adding client compatibility does not implement the separate adoption coordinator.
+
 The dependent [preparation-revocation controller](PREPARATION-REVOCATION.md)
 recovers unbound interrupted provisioning while preserving task workspaces.
 
