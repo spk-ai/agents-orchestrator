@@ -40,6 +40,7 @@ type fixtureConfig struct {
 	RunnerID          string `json:"runnerId"`
 	OrganizationID    string `json:"organizationId"`
 	PreparedWorkloads bool   `json:"preparedWorkloads,omitempty"`
+	VolumeMigration   bool   `json:"volumeMigration,omitempty"`
 }
 
 type tupleWriter struct {
@@ -154,10 +155,18 @@ func run() error {
 	// Keep the volume-only fixture buildable against its older reviewed APIs.
 	// Prepared mode requires the distinct anchored server handlers.
 	preparedRPCs := map[string]bool{}
+	migrationRPCs := map[string]bool{}
 	for _, method := range runnersv1.RunnersService_ServiceDesc.Methods {
 		if method.MethodName == "CreateAnchoredWorkload" || method.MethodName == "BindWorkloadResourceAnchors" || method.MethodName == "UpdateAnchoredWorkload" {
 			preparedRPCs["/"+runnersv1.RunnersService_ServiceDesc.ServiceName+"/"+method.MethodName] = true
 		}
+		switch method.MethodName {
+		case "BeginVolumeAnchorMigration", "GetVolumeAnchorMigration", "AdvanceVolumeAnchorMigration", "CreateVolume", "UpdateVolume":
+			migrationRPCs["/"+runnersv1.RunnersService_ServiceDesc.ServiceName+"/"+method.MethodName] = true
+		}
+	}
+	if cfg.VolumeMigration && len(migrationRPCs) != 5 {
+		return fmt.Errorf("reviewed volume migration RPCs required")
 	}
 	if cfg.PreparedWorkloads && len(preparedRPCs) != 3 {
 		return fmt.Errorf("reviewed prepared workload RPCs required")
@@ -178,6 +187,12 @@ func run() error {
 				return handler(ctx, req)
 			}
 			return nil, status.Error(codes.PermissionDenied, "prepared fixture mode required")
+		}
+		if migrationRPCs[info.FullMethod] {
+			if cfg.VolumeMigration {
+				return handler(ctx, req)
+			}
+			return nil, status.Error(codes.PermissionDenied, "migration fixture mode required")
 		}
 		switch info.FullMethod {
 		case runnersv1.RunnersService_CreateWorkload_FullMethodName:

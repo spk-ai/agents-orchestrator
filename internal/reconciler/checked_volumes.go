@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"math"
@@ -50,18 +51,21 @@ func validateCheckedVolume(v *runnersv1.Volume) error {
 		v.VolumeDefinitionId != nil && v.GetVolumeDefinitionId() != v.GetVolumeId() {
 		return checkedVolumeError(v, "identity aliases conflict")
 	}
-	if (v.ResourceAnchor == nil) != (v.AnchorReservation == nil) {
-		return checkedVolumeError(v, "anchor reservation receipt missing or unexpected")
+	if v.ResourceAnchor == nil && (v.AnchorReservation != nil || v.AnchorAdoption != nil) ||
+		v.ResourceAnchor != nil && ((v.AnchorReservation == nil) == (v.AnchorAdoption == nil)) {
+		return checkedVolumeError(v, "exactly one allocation or adoption receipt required for an anchor")
 	}
 	if a := v.ResourceAnchor; a != nil {
 		if v.Status == runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING && (v.BoundInstance != nil || v.LifecycleRevision != 2) {
 			return checkedVolumeError(v, "anchored first provision requires its original unbound generation")
 		}
-		receipt := v.AnchorReservation
-		if !preparedUUID(receipt.WorkloadId) || receipt.PreparationRevision == 0 || receipt.PreparationRevision > math.MaxInt64 ||
+		if receipt := v.AnchorReservation; receipt != nil && (!preparedUUID(receipt.WorkloadId) || receipt.PreparationRevision == 0 || receipt.PreparationRevision > math.MaxInt64 ||
 			receipt.ResourceRevision == 0 || receipt.ResourceRevision > math.MaxInt64 || len(receipt.ProtoReflect().GetUnknown()) != 0 ||
-			v.Status == runnersv1.VolumeStatus_VOLUME_STATUS_FAILED {
+			v.Status == runnersv1.VolumeStatus_VOLUME_STATUS_FAILED) {
 			return checkedVolumeError(v, "invalid persistent anchor reservation")
+		}
+		if err := validateVolumeAnchorAdoption(v); err != nil {
+			return err
 		}
 		w := &runnersv1.Workload{OwnerKind: v.OwnerKind, OwnerId: v.OwnerId, AgentId: v.AgentId, Preparation: &runnersv1.PreparedWorkloadLifecycle{BackendId: a.BackendId}}
 		if err := validateResourceAnchor(w, a, runnerv1.ResourceAnchorKind_RESOURCE_ANCHOR_KIND_VOLUME, v.Meta.Id, a.IdentityLabels["sandbox-owner-id"]); err != nil {
@@ -105,6 +109,25 @@ func validateCheckedVolume(v *runnersv1.Volume) error {
 		return checkedVolumeError(v, "unsupported lifecycle state")
 	}
 	return validateAnchoredVolumeRetirement(v)
+}
+
+func validateVolumeAnchorAdoption(v *runnersv1.Volume) error {
+	a := v.AnchorAdoption
+	if a == nil {
+		return nil
+	}
+	hash, err := hex.DecodeString(a.PvcSpecSha256)
+	if !preparedUUID(a.Id) || !preparedUUID(a.InstanceUid) || err != nil || len(hash) != 32 || hex.EncodeToString(hash) != a.PvcSpecSha256 ||
+		len(a.ProtoReflect().GetUnknown()) != 0 || a.Previous == nil || a.Previous.Anchor != nil || !proto.Equal(a.Anchor, v.ResourceAnchor) ||
+		v.BoundInstance == nil || v.Status == runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING || v.Status == runnersv1.VolumeStatus_VOLUME_STATUS_FAILED {
+		return checkedVolumeError(v, "complete immutable original-PVC adoption receipt required")
+	}
+	expected := proto.Clone(a.Previous).(*runnerv1.VolumeListItem)
+	expected.Anchor = a.Anchor
+	if !proto.Equal(expected, v.BoundInstance) {
+		return checkedVolumeError(v, "adoption cannot replace the original PVC or owner")
+	}
+	return nil
 }
 
 func validateVolumeInstance(v *runnersv1.Volume, item *runnerv1.VolumeListItem) error {
@@ -210,7 +233,8 @@ func (r *Reconciler) updateCheckedVolume(ctx context.Context, v *runnersv1.Volum
 	if !sameVolumeIdentity(v, next) || next.LifecycleRevision != v.LifecycleRevision+1 {
 		return nil, checkedVolumeError(v, "checked update changed identity or returned the wrong revision")
 	}
-	if req.GetBindAnchor() == nil && (!proto.Equal(v.ResourceAnchor, next.ResourceAnchor) || !proto.Equal(v.AnchorReservation, next.AnchorReservation)) {
+	if req.GetBindAnchor() == nil && (!proto.Equal(v.ResourceAnchor, next.ResourceAnchor) || !proto.Equal(v.AnchorReservation, next.AnchorReservation) ||
+		!proto.Equal(v.AnchorAdoption, next.AnchorAdoption)) {
 		return nil, checkedVolumeError(v, "checked update changed persistent native ownership")
 	}
 	if req.GetReopen() == nil && !sameVolumeSize(v.SizeGb, next.SizeGb) {
@@ -274,7 +298,7 @@ func (r *Reconciler) createOrReuseCheckedVolume(ctx context.Context, req *runner
 			return nil, false, err
 		}
 		if !volumeMatchesRequest(v, req) || v.LifecycleRevision != 1 || v.Status != runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING ||
-			v.BoundInstance != nil || v.ResourceAnchor != nil || v.AnchorReservation != nil || v.RemovedAt != nil || !sameVolumeSize(v.SizeGb, req.GetSizeGb()) {
+			v.BoundInstance != nil || v.ResourceAnchor != nil || v.AnchorReservation != nil || v.AnchorAdoption != nil || v.RemovedAt != nil || !sameVolumeSize(v.SizeGb, req.GetSizeGb()) {
 			return nil, false, checkedVolumeError(v, "create did not return the requested new generation")
 		}
 		return proto.Clone(v).(*runnersv1.Volume), true, nil

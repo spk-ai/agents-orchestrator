@@ -141,7 +141,7 @@ func (r *Reconciler) persistPreparedVolumes(ctx context.Context, plan *preparedS
 			return err
 		}
 		if !sameVolumeIdentity(expected, v) || !sameVolumeSize(expected.SizeGb, v.SizeGb) || v.LifecycleRevision < expected.LifecycleRevision ||
-			!proto.Equal(v.ResourceAnchor, expected.ResourceAnchor) || !proto.Equal(v.AnchorReservation, expected.AnchorReservation) ||
+			!proto.Equal(v.ResourceAnchor, expected.ResourceAnchor) || !proto.Equal(v.AnchorReservation, expected.AnchorReservation) || !proto.Equal(v.AnchorAdoption, expected.AnchorAdoption) ||
 			v.RemovalIntent != nil || v.BoundInstance != nil && !proto.Equal(v.BoundInstance, item) {
 			return checkedVolumeError(v, "workspace changed during preparation")
 		}
