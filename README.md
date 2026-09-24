@@ -1,5 +1,13 @@
 # Agents Orchestrator Service
 
+The `sync/2026-09-24-revocation-native-dns` branch retains the DNS and independent
+race/vet fixes on the rebased upstream `c88b608` contribution stack. Use API
+`spk-ai/api` `c21440b`, the matching `spk-ai/k8s-runner`
+`sync/2026-09-24-volume-adoption` branch, and registry `spk-ai/runners` `302b7c8`.
+Earlier revisions below are historical records. This is an acceptance
+combination, not a single upstream proposal or permission to upgrade installed
+workspaces. The separate adoption coordinator remains unimplemented.
+
 The dependent [preparation-revocation controller](PREPARATION-REVOCATION.md)
 recovers unbound interrupted provisioning while preserving task workspaces.
 
