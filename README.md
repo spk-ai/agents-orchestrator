@@ -17,13 +17,10 @@ race/vet fixes on the rebased upstream `c88b608` contribution stack. Use API
 `sync/2026-09-24-volume-adoption` branch, and registry `spk-ai/runners` `302b7c8`.
 Earlier revisions below are historical records. This is an acceptance
 combination, not a single upstream proposal or permission to upgrade installed
-workspaces. The separate adoption coordinator remains unimplemented.
+workspaces. That snapshot did not include the later operator adoption coordinator
+linked above.
 
-The dependent [preparation-revocation controller](PREPARATION-REVOCATION.md)
-recovers unbound interrupted provisioning while preserving task workspaces.
-
-The Agents Orchestrator runs a background reconciler that ensures agent workloads
-exist for threads with unacknowledged agent messages.
+See [preparation revocation](PREPARATION-REVOCATION.md) for recovery rollout limits.
 
 Architecture: https://github.com/agynio/architecture/blob/main/architecture/agents-orchestrator.md
 
@@ -39,6 +36,8 @@ The migration refuses previously unidentified checked bindings; do not infer an
 identity or rebind a record to whichever backend happens to answer. Stored
 runner/owner identity and the physical namespace identity have different roles;
 these checks are not authentication of the route or caller.
+
+Historical backend-identity acceptance:
 
 Tests include actual old-runner gRPC capability rejection and both owner kinds.
 The native fixture verifies wrong-runner routing against real Kubernetes,
@@ -68,16 +67,11 @@ start request that creates a workload after an absence check. Operators must
 drain and audit records written by older versions before relying on confirmation;
 historical timestamps cannot be retroactively verified. Permanently lost runners
 need an explicit infrastructure reconciliation procedure, not an automatic claim
-that their workloads stopped. Listing unremoved failures currently pages failed
-and stopped history because the Runners API has no confirmation-time filter.
+that their workloads stopped.
 
 The API and Runners service `feat/workload-removal-confirmation` branches add
 the explicit field and its storage. Generate against that API checkout for this
 branch; published BSR schemas and older Gateways do not yet carry the field.
-The AgentInstance lifecycle and its volume TTL use confirmation. Metering and
-failure backoff keep their existing billing timestamps. Sandbox planning also
-retains failed/stopped workloads without explicit removal confirmation; billing
-end alone cannot release their workspace or permit a replacement.
 
 ```sh
 cd ../api
@@ -114,6 +108,8 @@ ownership-aware garbage collection or a production rollout. A2A retains its own
 interrupted-execution quarantine and explicit recovery policy; reopening a
 volume is not permission to retry a possibly executed agent turn.
 
+Historical checked-volume acceptance:
+
 Validation includes ordinary Go tests, checked lifecycle/compensation/ownership
 regressions, malformed page/reply cases and controller reconstruction after lost
 begin/native/confirm replies. The optional native fixture below exercises both
@@ -127,17 +123,9 @@ selected suite excluding exactly that test passes with the native gate enabled.
 ## Immediate Stop On Pause (Opt-in)
 
 Set `STOP_INACTIVE_INSTANCES=true` when explicit pause or termination must stop
-an active workload without waiting for the daemon to go idle. On each main
-reconciliation tick, workloads no longer in the active desired set have their
-instance lifecycle checked. Confirmed `paused` or `terminated` instances go
-through the existing Runner `StopWorkload` path, even with recent keepalives.
-Inbox items and persistent volumes are retained; no SDK-specific signal or
-message acknowledgement is introduced.
-
-Unset or false preserves the existing idle-timeout behavior. Invalid boolean
-values stop configuration loading. Missing, mismatched or unreadable instance
-state does not authorize an immediate stop. Active idle instances retain the
-class idle timeout, and duplicate/STOPPING workload handling is unchanged.
+an active workload without waiting for the daemon to go idle. The policy checks
+live in [instance_stop.go](internal/reconciler/instance_stop.go); configuration
+validation is in [config.go](internal/config/config.go).
 
 Stopping is asynchronous. `POLL_INTERVAL`, `STOP_TIMEOUT_SEC`, runner health and
 API availability determine latency; an accepted pause is not a stopped-workload
@@ -147,23 +135,14 @@ execution guarantee or a new public cancellation API.
 
 ## Opt-in compute resource bounds
 
-Agents requiring `compute-resources` use the selected environment flavor's
-CPU/memory requests and limits for the main container. The deprecated
-`Agent.resources` is not used for this opted-in allocation. Explicit MCP bounds
-are passed to their sidecars. Missing MCP/supporting bounds delegate to the
-runner's operator-configured defaults; explicit partial or invalid messages fail
-assembly. The required capability is retained on `StartWorkload` so an old
-runner cannot silently discard the new fields.
+Allocation and validation live in [assembler.go](internal/assembler/assembler.go)
+and [compute_resources.go](internal/assembler/compute_resources.go); accounting
+limits are documented at [resources.go](internal/assembler/resources.go).
 
 This needs the `ContainerSpec.resources` addition in `agynio/api` and a runner
 implementing `compute-resources`. Upgrade those before enabling the capability
-on profiles. Agents without it retain the legacy assembly and accounting
-behavior. This change covers agent workloads, not the separate sandbox API.
-
-Declared allocation accounting now uses the flavor plus explicit MCP requests
-for opted-in agents. It does **not** include runner-owned supporting defaults or
-all Kubernetes Pod overhead, and is not a complete whole-task budget. Resource
-quotas, aggregate admission and hardening are separate deployment controls.
+on profiles. Do not assume this agent capability configures sandbox allocation.
+Resource quotas, aggregate admission and hardening are separate deployment controls.
 
 To test the pending API change in sibling source checkouts, first generate the
 published baseline as usual, then overlay only the changed runner contract:
@@ -203,15 +182,14 @@ go test -race ./internal/reconciler -run '^TestReconcileVolumes' -count=1
 
 ### Native Runner Acceptance
 
-The optional live test uses a reviewed k8s-runner checkout's real `ListVolumes`
-and `RemoveVolumeChecked` over loopback gRPC, plus Kubernetes PVCs. The registry and
-Agents clients are deterministic fakes; this is not a deployed platform or
-database test. The native runner must also reject missing/duplicate PVC keys,
-instead of silently returning a partial inventory. Both checkouts require the
-pending checked-volume API generation, not only the published baseline.
+The [live fixture](internal/reconciler/volume_retention_live_test.go) uses a
+reviewed native runner against Kubernetes, with fake registry and Agents clients.
+This is not a deployed platform or database test. Both checkouts require matching
+checked-volume API generation, not only the published baseline.
 
 Generate both repositories' APIs first. Build the native fixture inside the
-reviewed runner checkout so Go's internal-package boundary is preserved:
+reviewed runner checkout using [the builder](testdata/runner-volume-fixture/build.sh)
+so Go's internal-package boundary is preserved:
 
 ```bash
 bash testdata/runner-volume-fixture/build.sh /absolute/k8s-runner /absolute/private/native-runner-fixture
@@ -222,36 +200,22 @@ go test -race ./internal/reconciler -run '^TestLiveVolumeRetention$' -count=1
 ```
 
 The explicit kubeconfig must permit creating a disposable namespace and
-impersonating its PVC-only test service account. The fixture refuses cross-
-namespace PVC or Secret-list access, exposes only two RPCs, and permits removal
-only of its own empty claims. No existing runner deployment is used or changed.
-Seven 1 MiB claims name an absent storage class, so they acquire no backing disks;
-quota forbids any Pod. Namespace cleanup checks owned UIDs, unexpected objects
-and backing storage, then uses UID/resource-version deletion preconditions.
-Unknown data prevents cleanup instead of being removed. The control plane's
+impersonating its PVC-only test service account. Use only disposable resources,
+never an installed runner deployment. Review the fixture's cleanup guards rather
+than bypassing a refusal to delete unknown or backed storage. The control plane's
 credentials are never put in prompts, copied to another credential file, or
 passed as command arguments. This is trusted-local test infrastructure, not a
 production runner authentication or cleanup implementation.
 
-The fixture retains foreign/closed/untracked/late-created claims, refuses
-ambiguous inventory, and checks agent deletion across fresh reconciler objects.
-It then binds an unbound sandbox workspace with user ownership validation and
-checks pending/confirmed cleanup before sandbox finalization. These objects share
-explicit fake registry state; this is not process/database failover acceptance.
+The separate [process fixture](testdata/runners-volume-fixture/README.md) covers
+application-process replacement, not database failover.
 
 ## Workload DNS With Ziti
 
-Ziti-enabled agents and sandboxes use only the local intercepting resolver
-(`127.0.0.1`). Listing the cluster DNS server as a second Pod nameserver is not
-a safe fallback: [musl queries nameservers in parallel](https://wiki.musl-libc.org/functional-differences-from-glibc.html#Name-Resolver/DNS),
-so a faster ordinary answer can route native agent requests around interception.
-The readiness wait restores the same single-resolver configuration.
-
-`WORKLOAD_DNS_UPSTREAM` remains the tunneler's explicit `--dnsUpstream` for names
-it does not intercept and its control-plane startup resolution. Enrollment
-continues to use its separate configured upstream. If the local resolver is
-unavailable, workloads must fail resolution instead of using an ordinary DNS
-answer. Ziti-disabled workloads retain their existing DNS behavior.
+Resolver policy and the reason ordinary DNS cannot be a workload fallback live
+in [assembler.go](internal/assembler/assembler.go), with sandbox assembly in
+[sandbox.go](internal/assembler/sandbox.go). Operator upstream settings are
+defined in [config.go](internal/config/config.go).
 
 This is a resolver-routing correction, not an adversarial egress boundary:
 direct-IP traffic, custom resolvers, privileges and network policy require
@@ -271,6 +235,8 @@ chmod +x apply.sh
 ```
 
 ### Run from sources
+
+Use the repository's [DevSpace workflow](devspace.yaml) after bootstrap:
 
 ```bash
 # Deploy once (exit when healthy)

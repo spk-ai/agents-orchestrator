@@ -14,6 +14,8 @@ type resourceTotals struct {
 	ramBytes      int64
 }
 
+// sumAllocatedResources accounts for declared requests, not a whole-Pod budget:
+// runner-owned supporting defaults and Kubernetes overhead are not known here.
 func sumAllocatedResources(agent *agentsv1.Agent, mcps []mcpAssignment, mainResources *agentsv1.ComputeResources) (int32, int64, error) {
 	if agent == nil {
 		return 0, 0, fmt.Errorf("agent missing")

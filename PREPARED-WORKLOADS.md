@@ -1,5 +1,8 @@
 # Prepared Workload Controllers
 
+Dependency paragraphs and dated results below retain their original contribution
+scope; they are not a current build manifest or new acceptance run.
+
 This branch now contains the dependent [resource-anchor controller integration](RESOURCE-ANCHORS.md).
 The preparation-recovery lifecycle below describes its base. New starts require
 the newer API/native/registry revisions in that report, including registry
@@ -23,9 +26,6 @@ Native owner persistence lives in
 [resource_anchors.go](internal/reconciler/resource_anchors.go); workspace
 generation checks live in [checked_volumes.go](internal/reconciler/checked_volumes.go).
 
-Existing legacy records keep their removal path. Unsupported prepared/anchored
-RPCs do not authorize fallback or agent-message replay.
-
 ## Lost Preparation Recovery
 
 The retirement-only discovery contract lives beside `recoverPreparedRemovalBinding`
@@ -34,9 +34,7 @@ Subsequent anchored proof recovery lives in
 [preparation_revocation.go](internal/reconciler/preparation_revocation.go).
 The dated acceptance below describes its original preparation-observation scope.
 
-NotFound, Unimplemented, absent/invalid ownership markers, changed snapshots,
-incomplete volume sets and identity/generation conflicts retain admission. This
-is not initially-absent/late-create fencing, a credential revocation journal,
+Discovery is not initially-absent/late-create fencing, a credential revocation journal,
 automatic adoption of old resources, or an exactly-once side-effect guarantee.
 
 The source suite passes 663 ordinary and 662 selected race-test entries on
@@ -153,6 +151,8 @@ GET-only cluster RBAC are cleaned up with identity/absence checks; no existing
 workspace, installed database or deployment is modified.
 
 ## Remaining Release Gates
+
+These gates describe the original preparation-observation contribution above.
 
 Full A2A acceptance on the prepared stack is next; model-free combined execution
 does not establish it.

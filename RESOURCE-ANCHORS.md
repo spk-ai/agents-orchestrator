@@ -1,5 +1,8 @@
 # Resource Anchor Controllers
 
+The dependency and verification sections record the original anchor contribution,
+not the current branch's deployment manifest or completion checklist.
+
 Dependent controller contribution on preparation-recovery base `c2bb0e5`.
 Requires API `6fe4cab`, native k8s-runner `72a1cc8`, and Runners `e1a3b7f`
 including migrations `0023` and `0024`. It is not installed. This branch does
@@ -15,9 +18,7 @@ Historical anchor verification below retains its original scope.
 [prepared_start.go](internal/reconciler/prepared_start.go) owns shared agent and
 sandbox execution ordering; [resource_anchors.go](internal/reconciler/resource_anchors.go)
 owns request-label projection, exact native owner persistence and dual revisions.
-[checked_volumes.go](internal/reconciler/checked_volumes.go) owns allocation versus
-adoption provenance. New starts never fall back to old APIs; existing legacy
-records retain their explicit reconciliation path.
+[checked_volumes.go](internal/reconciler/checked_volumes.go) owns storage provenance.
 
 ## Recovery Boundaries
 
@@ -36,17 +37,12 @@ production authority to remove an installed workspace.
 
 ## Inbox Thread Identity
 
-The real assembler uses the inbox thread in the native `thread-id` label.
-Registry `thread_id` is a legacy instance alias in the existing orchestrator
-creation path. Neither that registry field nor persistent volume identity is
-rewritten here. Instead, the actual canonical inbox thread is pinned inside the
-immutable workload anchor and compared against native request/recovery evidence.
+The identity distinction is documented beside
+[reservePreparedAnchors](internal/reconciler/resource_anchors.go).
 
 Registry follow-up `e1a3b7f` corrects the Go/database validators. Additive
-migration `0024` preserves prior records and existing anchors. A subsequent
-workload can use another inbox thread while retaining its instance workspace;
-an already-bound workload cannot change its thread. These are identity checks,
-not proof of authenticated authority to select a thread or owner.
+migration `0024` preserves prior records and existing anchors. Shape validation
+does not authenticate authority to select a thread or owner.
 
 ## Verification
 
