@@ -10,46 +10,25 @@ The dependent [anchored retirement proposal](ANCHORED-VOLUME-RETIREMENT.md)
 adds migration `0025` and explicit PVC-and-owner removal to that baseline.
 Historical anchor verification below retains its original scope.
 
-## Execution Contract
+## Contract Owners
 
-Both agent and sandbox starts share the same anchored implementation:
-
-1. Validate the complete backend-bound inventory and checked volume records.
-   Legacy bound volumes are not implicitly adopted. An unanchored unbound
-   volume still needs this attempt's successful initial-create receipt.
-2. Call `CreateAnchoredWorkload` to persist the unused reservation. An old
-   registry cannot cause fallback to an unanchored start.
-3. Project native ownership from the actual assembled labels, including the
-   assembler's `label.*` properties and explicit-label precedence. Reject
-   reserved labels and owner mismatches before reserving native metadata.
-   Sandbox human ownership is also checked against Agents.
-4. Reserve the workload anchor and any missing volume anchors. Bind each volume
-   anchor and its exact workload/two-revision receipt before binding the full
-   owner set to the workload. Existing volume anchors are reused, never replaced.
-5. Advance both revisions before `PrepareAnchoredWorkload`. Validate every
-   returned Pod/PVC owner and identity before binding or activation.
-6. Remove the exact Pod, then require exact workload-anchor ABSENT before
-   confirming removal. Pending, unsupported, changed and ambiguous responses
-   retain admission. A new workload retains the original volume anchor/receipt.
-
-All new starts require the distinct anchored APIs. Old persisted unanchored
-workloads still reconcile/remove through their old contract. A workload cannot
-switch between the two contracts, and the new controller cannot silently adopt
-an old workspace into native ownership.
+[prepared_start.go](internal/reconciler/prepared_start.go) owns shared agent and
+sandbox execution ordering; [resource_anchors.go](internal/reconciler/resource_anchors.go)
+owns request-label projection, exact native owner persistence and dual revisions.
+[checked_volumes.go](internal/reconciler/checked_volumes.go) owns allocation versus
+adoption provenance. New starts never fall back to old APIs; existing legacy
+records retain their explicit reconciliation path.
 
 ## Recovery Boundaries
 
-For a lost preparation reply, persist REMOVING before read-only observation.
-A verified gated Pod can be bound and retired without preparation/activation
-replay. Unbound anchored volumes must still be the original revision-2
-first-provision generation; an old bound record cannot become new again.
+Lost-reply cleanup lives in
+[prepared_recovery.go](internal/reconciler/prepared_recovery.go) and
+[preparation_revocation.go](internal/reconciler/preparation_revocation.go).
+Exact bound removal and unused-reservation abort live in
+[prepared_workloads.go](internal/reconciler/prepared_workloads.go).
+Metadata cleanup is not a complete garbage collector or child-absence proof.
 
-If the Pod outcome is unverified or absent, attempt exact workload-anchor
-revocation but retain the unknown preparation's admission. Owner absence alone
-is not child-cleanup evidence. An unused RESERVED record can retire without a
-Pod receipt; known workload anchors must first be revoked. Lost metadata replies
-can still leave metadata for future cleanup, even when execution was never
-authorized. This contribution does not pretend to be a complete garbage collector.
+The following limitation records the original anchor-only contribution:
 
 Anchored volume retirement/failure/reopen through old commands is refused until
 the independent checked retirement contract exists. No fixture deletion grants

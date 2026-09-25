@@ -13,56 +13,26 @@ API, compatible stock image or production deployment. This focused branch does
 not include the separately reviewed workload DNS correction; an installed
 prepared/DNS stack must not be replaced with this branch alone.
 
-## Lifecycle
+## Contract Owners
 
-Both agent and sandbox startup use the same prepared path. No production caller
-uses legacy `CreateWorkload` or `StartWorkload`. Existing legacy workload records
-still use their existing reconciliation/removal paths; there is no automatic
-adoption and no fallback for an unsupported prepared RPC.
+Shared new-start authority is documented beside `startPreparedWorkload` in
+[prepared_start.go](internal/reconciler/prepared_start.go).
+Exact identity, monotonic evidence, removal and read-only activation-ACK recovery
+live in [prepared_workloads.go](internal/reconciler/prepared_workloads.go).
+Native owner persistence lives in
+[resource_anchors.go](internal/reconciler/resource_anchors.go); workspace
+generation checks live in [checked_volumes.go](internal/reconciler/checked_volumes.go).
 
-1. Resolve the selected runner's complete backend-bound volume inventory and
-   validate every named volume against its checked registry owner/generation.
-   Bound workspaces must still have the same backend, name and UID. Only this
-   attempt's successful initial-create receipt permits omission of a binding.
-   Old unbound and reopened unbound records require explicit reconciliation.
-2. Create the durable RESERVED workload with backend and complete volume set.
-   Persist PREPARING before sending the single native prepare request.
-3. Validate the returned complete binding, persist checked volume bindings,
-   and persist the Pod binding. A cancellation race may bind into REMOVING only
-   for cleanup. The controller never adopts a different returned workload ID.
-4. Inspect that exact binding without mutation. Persist ACTIVATING before the
-   native activation request; confirm the exact acknowledgement as ACTIVE.
-   Sandbox runtime remains STARTING until exact-binding container observation
-   proves readiness.
-5. Persist removal intent before native exact-binding removal. PENDING, errors,
-   malformed receipts and wrong UIDs do not confirm release. Only the matching
-   ABSENT observation permits REMOVED, credential revocation and identity cleanup.
-   An unused RESERVED workload can abort without a native request.
-
-Recovery reads committed state and checks immutable identity, monotonic revision
-and binding/removal evidence. It does not prepare or activate a workload. A
-read-only observation can recover a lost activation acknowledgement. An unknown
-prepare outcome now permits the constrained retirement discovery below, while
-unverified or absent outcomes retain admission. Expired reservations and unactivated bound
-Pods are retired, not executed by a recovery sweep. An exited main process is
-failed and retired without replaying its inbox.
+Existing legacy records keep their removal path. Unsupported prepared/anchored
+RPCs do not authorize fallback or agent-message replay.
 
 ## Lost Preparation Recovery
 
-For an unbound PREPARING workload, stop first persists REMOVING. The new native
-`ObserveWorkloadPreparation` RPC may discover only a gated, unexecuted Pod with
-atomic startup-Secret ownership semantics. The controller compares the full
-workload/backend/owner/volume identity against durable records; sandbox human
-ownership is checked against Agents as well. Every volume is validated before
-any binding write, and an unbound first-provision row must still be generation
-one. Existing bindings can only be retained unchanged.
-
-The existing checked-volume and workload CAS commands persist those exact
-bindings into REMOVING. They never authorize activation. Removal then uses the
-existing exact-Pod API and confirmation. A second recovery or late prepare
-reply may supply the same binding, but cannot restart execution or replace the
-workspace. Observation, binding and removal can each be interrupted and resumed
-from durable state without calling prepare/activate again.
+The retirement-only discovery contract lives beside `recoverPreparedRemovalBinding`
+in [prepared_recovery.go](internal/reconciler/prepared_recovery.go).
+Subsequent anchored proof recovery lives in
+[preparation_revocation.go](internal/reconciler/preparation_revocation.go).
+The dated acceptance below describes its original preparation-observation scope.
 
 NotFound, Unimplemented, absent/invalid ownership markers, changed snapshots,
 incomplete volume sets and identity/generation conflicts retain admission. This

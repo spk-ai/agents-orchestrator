@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "documents": [
+    {
+      "id": "readme",
+      "path": "README.md",
+      "title": "Agents Orchestrator",
+      "purpose": "Repository entry point, development setup and integration context.",
+      "kind": "navigation"
+    },
+    {
+      "id": "agents",
+      "path": "AGENTS.md",
+      "title": "Agents Orchestrator Contribution Guide",
+      "purpose": "Source ownership, living documentation and verification rules.",
+      "kind": "contribution"
+    },
+    {
+      "id": "volume-migration",
+      "path": "VOLUME-ANCHOR-MIGRATION.md",
+      "title": "Existing Workspace Migration",
+      "purpose": "Operator drain, backup, immutable-plan resume and quarantine procedure.",
+      "kind": "operations"
+    },
+    {
+      "id": "resource-anchors",
+      "path": "RESOURCE-ANCHORS.md",
+      "title": "Resource Anchor Controllers",
+      "purpose": "Cross-repo dependencies, native thread identity investigation and dated acceptance.",
+      "kind": "verification"
+    },
+    {
+      "id": "prepared-workloads",
+      "path": "PREPARED-WORKLOADS.md",
+      "title": "Prepared Workload Controllers",
+      "purpose": "Prepared-controller integration, reproduction and historical recovery evidence.",
+      "kind": "verification"
+    },
+    {
+      "id": "preparation-revocation",
+      "path": "PREPARATION-REVOCATION.md",
+      "title": "Interrupted Preparation Recovery",
+      "purpose": "DNS-compatible integration history, recovery acceptance and release gates.",
+      "kind": "verification"
+    },
+    {
+      "id": "anchored-retirement",
+      "path": "ANCHORED-VOLUME-RETIREMENT.md",
+      "title": "Anchored Volume Retirement Controllers",
+      "purpose": "Workspace retirement dependencies and historical process acceptance.",
+      "kind": "verification"
+    },
+    {
+      "id": "group-consumer-test",
+      "path": "GROUP-CONSUMER-TEST.md",
+      "title": "Group Consumer Test Synchronization",
+      "purpose": "Historical test-race repair and its verification scope.",
+      "kind": "historical"
+    },
+    {
+      "id": "ziti-service-loss",
+      "path": "docs/investigations/ziti-sidecar-service-loss-2026-03-29.md",
+      "title": "Ziti Sidecar Service Loss Investigation",
+      "purpose": "Dated investigation evidence for overlay service loss.",
+      "kind": "historical"
+    },
+    {
+      "id": "prepared-fixture",
+      "path": "testdata/runner-prepared-fixture/README.md",
+      "title": "Prepared Runner Fixture",
+      "purpose": "Opt-in native and process acceptance setup and cleanup boundaries.",
+      "kind": "verification"
+    },
+    {
+      "id": "registry-volume-fixture",
+      "path": "testdata/runners-volume-fixture/README.md",
+      "title": "Runners Volume Fixture",
+      "purpose": "Disposable registry and checked-volume fixture setup and limits.",
+      "kind": "verification"
+    }
+  ]
+}

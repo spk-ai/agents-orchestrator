@@ -137,6 +137,13 @@ func validateRevokedWorkspace(w *runnersv1.Workload, anchor *runnerv1.ResourceAn
 	return nil
 }
 
+// recoverRevokedPreparation persists exact proof before observing it. Validate the
+// complete found/absent partition, bind discovered original PVCs, then confirm via
+// a separate preparation/resource CAS. The registry rechecks under its owner lock.
+// Stored proof resumes observation, not Pod discovery; lost replies never reset
+// allocation provenance, replace a known UID or authorize execution.
+// @see runners::internal/server/preparation_revocation
+// @see k8s-runner::internal/server/preparation_revocation
 func (r *Reconciler) recoverRevokedPreparation(ctx context.Context, runner runnerv1.RunnerServiceClient, previous *runnersv1.Workload) (*runnersv1.Workload, error) {
 	w, err := r.currentPreparedWorkload(ctx, previous)
 	if err != nil {

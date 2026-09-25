@@ -1,5 +1,16 @@
 # Agents Orchestrator Service
 
+Current implementation contracts live beside the Go owners listed in
+[AGENTS.md](AGENTS.md); [docs/catalog.json](docs/catalog.json) indexes the
+operational and historical documents. The operator adoption coordinator is now
+in [coordinator.go](internal/volumemigration/coordinator.go), with its runbook in
+[VOLUME-ANCHOR-MIGRATION.md](VOLUME-ANCHOR-MIGRATION.md).
+
+## Integration Snapshot (2026-09-24)
+
+The following dependency summary and older test reports retain their original
+scope; they are not a current build manifest or deployment authorization.
+
 The `sync/2026-09-24-revocation-native-dns` branch retains the DNS and independent
 race/vet fixes on the rebased upstream `c88b608` contribution stack. Use API
 `spk-ai/api` `c21440b`, the matching `spk-ai/k8s-runner`
@@ -18,12 +29,10 @@ Architecture: https://github.com/agynio/architecture/blob/main/architecture/agen
 
 ## Backend-Bound Volume Lifecycle
 
-This dependent proposal pins the storage backend in native inventory, registry
-bindings, removal intents and confirmations. Inventory from another backend is
-retained without declaring the original workspace lost. Mixed/unknown inventory
-identity or a mismatched pending/absent response cannot authorize a transition.
-The controller uses `RemoveVolumeBound`; older runners return `Unimplemented`.
-It never falls back to `RemoveVolumeChecked` or name-only deletion.
+Backend-bound inventory and durable deletion targets are owned by
+[checked_volumes.go](internal/reconciler/checked_volumes.go) and
+[volume_reconcile.go](internal/reconciler/volume_reconcile.go). Their comments
+define fail-closed transitions and the distinct native removal capability.
 
 The matching API, registry migration `0021` and native runner must be coordinated.
 The migration refuses previously unidentified checked bindings; do not infer an
@@ -46,22 +55,12 @@ selected race and `go vet -assign=false` results are not unfiltered passes.
 
 ## Confirmed Workload Removal
 
-`StopWorkload` may acknowledge a deletion request before the runtime has gone.
-The reconciler keeps `STOPPING` workloads pending until the runner's
-`InspectWorkload` reports `NotFound` for the persisted request ID and any returned
-runtime ID, including legacy aliases. A stopped main container is not sufficient
-because sidecars may still exist. Removal checks retry on later reconciliation
-ticks rather than blocking all tasks during a termination grace period.
-
-Runner dial/list/inspect failures and unenrollment are not removal evidence.
-Agent failures retain an unset `removal_confirmed_at` until confirmed absent;
-these records remain in reconciliation and prevent replacements even when
-`removed_at` has already ended billing. Unconfirmed stopped records are also
-tracked. A lost start reply is inspected and
-stopped using the ID persisted before the request. Existing failure reasons and
-retry backoff survive cleanup. Agent-instance persistent-volume TTL starts from confirmed
-removal, never a failure's update timestamp; any unremoved workload holds its
-instance's volume even when older removed workloads have expired retention.
+Legacy absence confirmation lives beside `handleMissingRunnerWorkload` in
+[workload_reconcile.go](internal/reconciler/workload_reconcile.go).
+Prepared exact-binding cleanup lives beside `stopPreparedWorkload` in
+[prepared_workloads.go](internal/reconciler/prepared_workloads.go).
+Retention from confirmed absence is documented beside `agentInstanceActivity`
+in [volume_reconcile.go](internal/reconciler/volume_reconcile.go).
 
 This trusts the runner's inspection contract. It is not fencing against a
 partitioned Kubernetes node, force-deleted pods, reused workload IDs or a delayed
@@ -94,28 +93,12 @@ generated source or unrelated API changes belong in this contribution.
 
 ## Checked Volume Lifecycle
 
-This dependent branch migrates agent-instance and sandbox volume creation,
-reuse, activation, failure compensation, TTL and termination to the checked
-registry/native RPCs. There is no legacy create/update/name-only-delete fallback.
-Existing open records must carry checked metadata and match the complete durable
-owner identity. Failed and confirmed-deleted generations require an explicit
-revision-checked reopen. Only newly created/reopened snapshots are eligible for
-provisioning failure compensation; stale revisions are not re-read or retried.
-
-Binding pins the runner's physical name, UID and persistent ownership labels.
-Sandbox adoption additionally verifies the user against the Agents sandbox
-record. Removal first commits a revision-checked intent, then sends its exact
-target to `RemoveVolumeChecked`. `PENDING` never closes the registry row. Only
-`ABSENT` followed by a matching registry confirmation does so. A subsequent
-reconciler resumes the stored intent, not a freshly discovered replacement UID.
-Malformed, stale or unsupported acknowledgements stop the attempt.
-
-Missing inventory, an unreachable runner and billing timestamps are not absence
-confirmation. Registry pagination rejects nil responses, duplicate IDs and
-cycles. Sandbox cleanup validates the complete owner-scoped listing before
-stopping duplicate workloads; terminated sandboxes remain discoverable until
-their workspace removal is confirmed. Unbound or legacy disks remain retained
-for explicit reconciliation rather than being guessed absent.
+Shared checked creation, identity validation, compensation and removal live in
+[checked_volumes.go](internal/reconciler/checked_volumes.go).
+[prepared_start.go](internal/reconciler/prepared_start.go) and
+[resource_anchors.go](internal/reconciler/resource_anchors.go) own new-start
+authority and persistent owner provenance. Original inventory is never a
+name-only deletion permit; unbound or legacy history needs explicit reconciliation.
 
 Dependencies are not published or permanently deployed: generate the combined
 API `ec2bfed`, use checked runner integration `3c461c5`, and require Runners
@@ -199,10 +182,9 @@ Do not include unrelated generated API changes in this contribution.
 
 ## Volume Reconciliation Safety
 
-Runner volumes without a match in the scoped, active registry snapshot are
-retained and logged for ownership reconciliation. The two lists are not atomic:
-a disk can belong to another organization, a closed record, or a record created
-after the registry scan. Absence from that snapshot is not deletion authority.
+The scoped-inventory retention rule is documented beside `reconcileVolumes` and
+`indexRunnerVolumes` in
+[volume_reconcile.go](internal/reconciler/volume_reconcile.go).
 
 This deliberately changes the architecture's automatic orphan-deletion policy.
 Truly orphaned disks are also retained; operators must account for that storage
@@ -210,13 +192,8 @@ until an ownership- and generation-checked garbage collector is available. Do no
 replace this with a second lookup followed by a name-only delete: creation and
 reopening can still race that lookup.
 
-A nil, malformed or duplicate runner inventory is rejected in full for that
-runner before updating records or deleting disks. Both volume keys and physical
-instance names must be present and unique. Other runners can still reconcile.
-Valid tracked provisioning, persistent-volume reuse, TTL and deprovisioning
-use the checked lifecycle above. Name/UID binding and revision guards address
-stale deletion targets; backend routing, authorization, node partitions and late
-creates still require separate fencing and acceptance.
+Name/UID binding and revision guards do not authenticate backend routes or fence
+node partitions and late creates. Those require separate enforcement/acceptance.
 
 Focused regression tests (generate the APIs as in the development setup first):
 

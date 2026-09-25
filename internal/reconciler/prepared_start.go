@@ -192,6 +192,13 @@ func (r *Reconciler) persistPreparedBinding(ctx context.Context, previous *runne
 	return nil, fmt.Errorf("prepared binding conflicted repeatedly; reconciliation required")
 }
 
+// startPreparedWorkload is shared by agent and sandbox starts. Persist the unused
+// anchored reservation and complete owners, then PREPARING before the one native
+// prepare dispatch. Validate every identity and bind checked volumes and Pod before
+// persisting ACTIVATING. Unknown replies retain admission; unsupported RPCs and
+// lost acknowledgements never permit legacy fallback or execution replay.
+// @see runners::internal/server/prepared_workloads
+// @see k8s-runner::internal/server/anchored_workload
 func (r *Reconciler) startPreparedWorkload(ctx context.Context, runner runnerv1.RunnerServiceClient, metadata *runnersv1.CreateWorkloadRequest, request *runnerv1.StartWorkloadRequest, infos []assembler.PersistentVolumeInfo, created []volumeRecord) (result *runnersv1.Workload, resultErr error) {
 	var owned *runnersv1.Workload
 	registryAttempted := false

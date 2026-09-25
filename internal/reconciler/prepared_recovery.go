@@ -46,6 +46,12 @@ func (r *Reconciler) validateObservedPreparedOwner(ctx context.Context, w *runne
 	return nil
 }
 
+// recoverPreparedRemovalBinding discovers only an unexecuted gated incarnation
+// after durable REMOVING. Validate the whole owner/workspace set before any bind;
+// known UIDs are immutable and unknown workspaces must be original provisioning.
+// Binding permits exact cleanup only. Failed discovery may use anchored revocation,
+// but NotFound/Unimplemented alone never release admission.
+// @see k8s-runner::internal/server/prepared_observation
 func (r *Reconciler) recoverPreparedRemovalBinding(ctx context.Context, runner runnerv1.RunnerServiceClient, previous *runnersv1.Workload) (*runnersv1.Workload, error) {
 	if err := validatePreparedWorkload(previous); err != nil {
 		return nil, err

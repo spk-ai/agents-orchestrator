@@ -111,6 +111,10 @@ func validateCheckedVolume(v *runnersv1.Volume) error {
 	return validateAnchoredVolumeRetirement(v)
 }
 
+// validateVolumeAnchorAdoption keeps migration distinct from first allocation.
+// Adoption retains the original backend/name/UID/owner and exact resulting anchor;
+// validateCheckedVolume requires exactly one provenance, never a fabricated receipt.
+// @see runners::internal/server/volume_anchor_migration
 func validateVolumeAnchorAdoption(v *runnersv1.Volume) error {
 	a := v.AnchorAdoption
 	if a == nil {
@@ -354,6 +358,10 @@ func (r *Reconciler) bindCheckedVolume(ctx context.Context, v *runnersv1.Volume,
 	})
 }
 
+// advanceVolumeRemoval resumes the durable target, not inventory by name. Commit
+// begin before the native call; PENDING/errors retain the record. Only matching
+// backend ABSENT plus registry confirmation closes it. Anchored volumes use their
+// distinct retirement RPC; no legacy fallback or deletion after stored confirmation.
 func (r *Reconciler) advanceVolumeRemoval(ctx context.Context, runner runnerv1.RunnerServiceClient, v *runnersv1.Volume) (bool, error) {
 	if err := validateCheckedVolume(v); err != nil {
 		return false, err

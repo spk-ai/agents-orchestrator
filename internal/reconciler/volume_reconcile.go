@@ -64,6 +64,10 @@ func runnerInScopeForVolumes(runnerID string, runnerOrganizationID string, organ
 	return true, nil
 }
 
+// reconcileVolumes retains claims outside the scoped registry snapshot: the two
+// inventories are not atomic, so unmatched storage is not a deletion permit.
+// Validate each runner's complete backend-bound inventory before transitions;
+// missing/foreign backend evidence cannot close a persisted binding.
 func (r *Reconciler) reconcileVolumes(ctx context.Context) error {
 	if r.agents == nil {
 		return fmt.Errorf("agents client not configured")
@@ -410,6 +414,9 @@ func (r *Reconciler) volumeTTLInfo(ctx context.Context, volumeID string, cache m
 	return info, nil
 }
 
+// agentInstanceActivity starts volume retention at confirmed removal, not billing
+// or failure time. Any unconfirmed workload retains the owner's workspace even
+// when older confirmed history has already exceeded its TTL.
 func (r *Reconciler) agentInstanceActivity(ctx context.Context, agentInstanceID string, cache map[string]instanceActivity) (instanceActivity, error) {
 	if cached, ok := cache[agentInstanceID]; ok {
 		return cached, nil

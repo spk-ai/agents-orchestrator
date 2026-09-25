@@ -22,35 +22,15 @@ passes on focused source `b08d43b`; it was not rerun on this combination. After
 both fixtures cleaned up, the shared installed baseline matched exactly. No
 deployment or installed workspace is changed.
 
-## Behavior
+## Contract Owners
 
-The shared agent-instance/sandbox stop path first persists `REMOVING`. A fully
-observed, gated Pod still uses the established exact-binding cleanup protocol.
-If native preparation observation fails, an anchored workload can instead use
-`RevokeWorkloadPreparation`. The controller validates and persists that complete
-receipt before asking `ObservePreparationRevocation` for cleanup evidence.
-
-A stored proof resumes through observation, never ordinary Pod discovery.
-Pending/unsupported/invalid responses retain admission. The revocation failure's
-status remains actionable; an earlier NotFound does not mask an Aborted CAS.
-Failed recovery no longer deletes the native owner without retaining a proof.
-
-Before any discovered PVC is bound, the entire observation partition and all
-owner-scoped checked records are validated. A known UID must match exactly; an
-absent or newly discovered allocation must still be its original unbound
-anchored generation. Existing checked-volume CAS calls bind newly found PVCs.
-The registry repeats its checks under the admission lock before confirmation.
-
-Proof and observation use separate preparation/resource revision updates.
-Responses must preserve exact immutable evidence, and completed history cannot
-acquire replacement evidence. A late prepare reply cannot replace a recorded
-revocation with a Pod binding. Lost replies resume from the persisted state;
-no recovery path prepares, activates or resends an agent turn.
-
-After confirmed cleanup, an explicitly requested new workload may use the same
-workspace anchor and physical UID. An original first-provision reservation is
-not reset merely because its PVC was initially absent. The old workload remains
-immutable history with nil ordinary Pod binding/removal observation.
+The exact-proof, complete-partition and separate-CAS recovery contract lives beside
+`recoverRevokedPreparation` in
+[preparation_revocation.go](internal/reconciler/preparation_revocation.go).
+[prepared_recovery.go](internal/reconciler/prepared_recovery.go) owns the transition
+from failed gated-Pod discovery, and
+[prepared_workloads.go](internal/reconciler/prepared_workloads.go) owns stop/resume
+dispatch. Recovery never retries an agent turn or replaces workspace identity.
 
 ## Verification
 

@@ -32,11 +32,10 @@ The deployment coordinator must enforce both. The private transport has the
 same trusted-platform boundary as the existing orchestrator; expose neither
 registry nor Ziti management publicly.
 
-Begin installs a durable owner-wide admission block. Reserve, apply and ready
-receipts advance through registry CAS and independent reads. SQL must contain
-the exact applied binding before native finalization removes its temporary
-hold. All volumes need independent native READY observations before completion
-opens the owner. The existing PVC UID/spec/content remain unchanged.
+Implementation ordering and independent-read requirements live beside
+`Coordinator` and `Run` in
+[coordinator.go](internal/volumemigration/coordinator.go), using the RPC contracts
+owned by the API and registry. The original PVC UID/spec/content must survive.
 
 Any ambiguous response stops the invocation. Resume the **same immutable plan**;
 do not manufacture a new migration ID, clear a block or retry an agent turn.

@@ -43,6 +43,12 @@ func validateAnchoredVolumeRetirement(v *runnersv1.Volume) error {
 	return nil
 }
 
+// advanceAnchoredVolumeRemoval persists intent before native PVC/owner retirement
+// and its exact ABSENT receipt before reporting completion. Checked-volume helpers
+// preserve immutable provenance; corrupt/unsupported replies never authorize an
+// unanchored deletion fallback.
+// @see runners::internal/server/anchored_volume_removal
+// @see k8s-runner::internal/server/anchored_volume_removal
 func (r *Reconciler) advanceAnchoredVolumeRemoval(ctx context.Context, runner runnerv1.RunnerServiceClient, v *runnersv1.Volume) (bool, error) {
 	next, err := r.updateCheckedVolume(ctx, v, &runnersv1.UpdateVolumeCheckedRequest{
 		Operation: &runnersv1.UpdateVolumeCheckedRequest_BeginAnchoredRemoval{BeginAnchoredRemoval: &runnersv1.BeginAnchoredVolumeRemoval{}},

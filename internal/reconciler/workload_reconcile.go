@@ -228,6 +228,11 @@ var configInvalidReasons = map[string]struct{}{
 	"InvalidImageName":           {},
 }
 
+// handleMissingRunnerWorkload requires legacy NotFound inspection for the request
+// and runtime IDs, including aliases. Stop ACKs, exited main containers, unavailable
+// runners and list failures are not absence. Unconfirmed failed/stopped records
+// remain tracked and prevent replacement. Prepared workloads use exact bindings.
+// @see runners::internal/server/workloads
 func (r *Reconciler) handleMissingRunnerWorkload(ctx context.Context, runnerClient runnerv1.RunnerServiceClient, workload *runnersv1.Workload) error {
 	if workload.GetPreparation() != nil {
 		return r.handlePreparedRunnerWorkload(ctx, runnerClient, workload)

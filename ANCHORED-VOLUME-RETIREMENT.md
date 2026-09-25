@@ -4,17 +4,13 @@ Dependent on `feat/resource-anchor-controllers` and the matching API, Runners
 and k8s-runner `feat/anchored-volume-removal` branches. This focused proposal is
 not installed and does not include the separate native DNS correction.
 
-Both agent and sandbox volume-retirement paths persist the new anchored intent
-before invoking the distinct native retirement RPC. They validate the exact
-backend, bound PVC, owner and original reservation throughout. PENDING retains
-the volume; ABSENT must be persisted with the original intent before the
-controller reports retirement. Recovery reads durable history instead of
-replaying a turn. Persisted confirmation does not reissue native deletion.
-
-There is no fallback to old runner or registry operations. Corrupt, unavailable,
-unsupported and mismatched replies fail closed. Existing unanchored checked
-volumes keep their previous explicit removal contract. Unbound first provision
-requires reconciliation. Idle turns retain their workspace and volume owner.
+The intent-before-delete and exact-receipt contract lives beside
+`advanceAnchoredVolumeRemoval` in
+[anchored_volume_removal.go](internal/reconciler/anchored_volume_removal.go).
+[checked_volumes.go](internal/reconciler/checked_volumes.go) owns immutable
+provenance and dispatch for anchored versus unanchored records.
+There is no legacy fallback. Idle compute release retains the workspace; unbound
+first provisioning requires separate reconciliation.
 
 ## Verification
 

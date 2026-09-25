@@ -196,6 +196,14 @@ func preparedRequestOwnerLabels(req *runnerv1.StartWorkloadRequest) (map[string]
 	return labels, nil
 }
 
+// reservePreparedAnchors persists metadata while the reservation is unused. Volume
+// owners retain original allocation/adoption provenance across turns. Bind missing
+// volume owners with this workload's two-revision receipt before the complete set.
+// The native inbox thread comes from assembled labels, not the registry instance
+// alias; explicit labels override label.*. Lost replies stop startup, never
+// authorizing guessed owner UIDs or another prepare.
+// @see runners::internal/server/resource_anchors
+// @see k8s-runner::internal/server/resource_anchors
 func (r *Reconciler) reservePreparedAnchors(ctx context.Context, runner runnerv1.RunnerServiceClient, w *runnersv1.Workload, plan *preparedStartPlan) (*runnersv1.Workload, error) {
 	if w.Preparation.Resources.GetRevision() != 1 || w.Preparation.Resources.Workload != nil || w.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_RESERVED {
 		return nil, fmt.Errorf("unused anchored reservation required")
@@ -271,6 +279,9 @@ func (r *Reconciler) reservePreparedAnchors(ctx context.Context, runner runnerv1
 	return proto.Clone(next).(*runnersv1.Workload), nil
 }
 
+// revokePreparedAnchor retires only the exact workload owner. Known bound compute
+// must be absent first; owner absence alone cannot settle an unknown preparation
+// or delayed children. Volume owners survive ordinary compute release.
 func revokePreparedAnchor(ctx context.Context, runner runnerv1.RunnerServiceClient, w *runnersv1.Workload) error {
 	a := w.GetPreparation().GetResources().GetWorkload()
 	if a == nil {

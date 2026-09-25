@@ -33,6 +33,15 @@ type Native interface {
 	ObserveVolumeAnchorAdoption(context.Context, *runnerv1.ObserveVolumeAnchorAdoptionRequest, ...grpc.CallOption) (*runnerv1.ObserveVolumeAnchorAdoptionResponse, error)
 }
 
+// Coordinator orders owner blocking, native reservation, registry receipt, native
+// apply, registry binding, finalization and independent READY reads. It rereads the
+// applied volume before removing the native hold and rechecks all volumes before
+// owner completion. Adoption never fabricates allocation provenance. The interfaces
+// cannot execute work, allocate/delete storage or install credentials; quarantine
+// has no automatic unblock path.
+// @see runners::internal/server/volume_anchor_migration
+// @see k8s-runner::internal/server/volume_anchor_adoption
+// @see api::proto/agynio/api/runners/v1/runners
 type Coordinator struct {
 	Registry Registry
 	Native   Native

@@ -240,6 +240,13 @@ func reflectPreparedWorkload(target, current *runnersv1.Workload) {
 	target.Containers = current.Containers
 }
 
+// stopPreparedWorkload rereads durable state. An unused reservation may abort after
+// known anchor revocation; otherwise REMOVING precedes native recovery/removal.
+// Exact Pod ABSENT and, when anchored, owner ABSENT precede bound confirmation.
+// Stored revocation uses its own observation path, not ordinary Pod discovery.
+// Pending/errors retain admission and credentials; cleanup never prepares,
+// activates or replays a turn. PVCs remain task-owned after compute release.
+// @see k8s-runner::internal/server/prepared_workload
 func (r *Reconciler) stopPreparedWorkload(ctx context.Context, runner runnerv1.RunnerServiceClient, previous *runnersv1.Workload) error {
 	w, err := r.currentPreparedWorkload(ctx, previous)
 	if err != nil {
