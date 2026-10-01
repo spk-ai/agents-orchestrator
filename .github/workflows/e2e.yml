@@ -790,6 +790,15 @@ jobs:
             --path agynio/api/authorization/v1
           gofmt -w internal/server/server.go internal/server/server_test.go
           CGO_ENABLED=0 go test ./internal/server -run 'TestAddExposureAllowsAgentInstanceOwner|TestAddExposureHappyPath|TestListExposuresSuccess' -count=1
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          p = Path('Dockerfile')
+          s = p.read_text()
+          old = 'RUN buf generate buf.build/agynio/api'
+          assert s.count(old) == 1 and s.count('WORKDIR /src') == 1, 'pinned expose build contract changed'
+          s = s.replace('WORKDIR /src', 'WORKDIR /src\nRUN apk add --no-cache git')
+          p.write_text(s.replace(old, 'RUN buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto'))
+          PYCODE
           image="e2e/expose:agent-instances"
           docker build -t "${image}" .
           agyn local load-image "${image}"
@@ -1046,6 +1055,14 @@ jobs:
             kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_gateway_source_diagnostics ERR
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          p = Path('scripts/devspace-startup.sh')
+          s = p.read_text()
+          old = 'buf generate buf.build/agynio/api'
+          assert s.count(old) == 1, 'pinned gateway generation contract changed'
+          p.write_text(s.replace(old, 'buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto'))
+          PYCODE
           buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto
           CGO_ENABLED=0 go test ./cmd/gateway ./internal/identity ./internal/zitimgmtclient
           node <<'NODE'
@@ -1083,29 +1100,6 @@ jobs:
               '      kubectl rollout status deployment/gateway -n ${GATEWAY_NAMESPACE} --timeout=240s',
               '      if [ "$(get_flag "watch")" == "true" ]; then',
             ].join('\n'));
-          }
-          const resourcesOriginal = [
-            '                resources:',
-            '                  requests:',
-            '                    cpu: 500m',
-            '                    memory: 1Gi',
-            '                  limits:',
-            '                    cpu: "2"',
-            '                    memory: 4Gi',
-          ].join('\n');
-          const resourcesReplacement = [
-            '                resources:',
-            '                  requests:',
-            '                    cpu: 100m',
-            '                    memory: 512Mi',
-            '                  limits:',
-            '                    cpu: "1"',
-            '                    memory: 2Gi',
-          ].join('\n');
-          if (text.includes(resourcesOriginal)) {
-            text = text.replace(resourcesOriginal, resourcesReplacement);
-          } else if (!text.includes(resourcesReplacement)) {
-            throw new Error('gateway DevSpace resources block not found');
           }
           fs.writeFileSync(path, text);
           NODE
@@ -1202,6 +1196,8 @@ jobs:
                 - require_unimplemented_servers=false
           EOF
           PATH="${protoc_bin}:${PATH}" buf generate "${proto_input}" \
+            --path "${proto_input}/agynio/api/agents/v1" \
+            --path "${proto_input}/agynio/api/notifications/v1" \
             --path "${proto_input}/agynio/api/llm/v1" \
             --path "${proto_input}/agynio/api/users/v1" \
             --path "${proto_input}/agynio/api/organizations/v1" \
@@ -1212,165 +1208,22 @@ jobs:
             --template "${proto_template}"
           gofmt -w internal/proxy/handler.go
           CGO_ENABLED=0 go test ./cmd/llm-proxy ./internal/proxy
-          node <<'NODE'
-          const fs = require('fs');
-          const path = 'devspace.yaml';
-          let text = fs.readFileSync(path, 'utf8');
-          text = text
-            .split('\n')
-            .filter((line) => line.trim() !== '- /.gen/')
-            .join('\n');
-
-          const resolveBlockMarker = 'Resolving llm-proxy deployment before source patch...';
-          if (!text.includes(resolveBlockMarker)) {
-            const marker = '    echo "Patching llm-proxy deployment for DevSpace..."';
-            if (!text.includes(marker)) {
-              throw new Error('llm-proxy DevSpace patch marker not found');
-            }
-            text = text.replace(marker, [
-              '    echo "' + resolveBlockMarker + '"',
-              '    llm_proxy_namespace="${LLM_PROXY_NAMESPACE:-agyn-platform}"',
-              '    llm_proxy_deployment="$(kubectl get deployment -n "${llm_proxy_namespace}" -l app.kubernetes.io/instance=llm-proxy -o jsonpath=\'{.items[0].metadata.name}\' 2>/dev/null || true)"',
-              '    if [ -z "${llm_proxy_deployment}" ]; then',
-              '      llm_proxy_deployment="$(kubectl get deployment -n "${llm_proxy_namespace}" -l app.kubernetes.io/name=llm-proxy -o jsonpath=\'{.items[0].metadata.name}\' 2>/dev/null || true)"',
-              '    fi',
-              '    if [ -z "${llm_proxy_deployment}" ]; then',
-              '      llm_proxy_ref="$(kubectl get deployment -A -l app.kubernetes.io/instance=llm-proxy -o jsonpath=\'{range .items[0]}{.metadata.namespace}{"\\t"}{.metadata.name}{end}\' 2>/dev/null || true)"',
-              '      if [ -z "${llm_proxy_ref}" ]; then',
-              '        llm_proxy_ref="$(kubectl get deployment -A -l app.kubernetes.io/name=llm-proxy -o jsonpath=\'{range .items[0]}{.metadata.namespace}{"\\t"}{.metadata.name}{end}\' 2>/dev/null || true)"',
-              '      fi',
-              '      if [ -n "${llm_proxy_ref}" ]; then',
-              '        llm_proxy_namespace="$(printf \'%s\' "${llm_proxy_ref}" | awk \'{ print $1 }\')"',
-              '        llm_proxy_deployment="$(printf \'%s\' "${llm_proxy_ref}" | awk \'{ print $2 }\')"',
-              '      fi',
-              '    fi',
-              '    if [ -z "${llm_proxy_deployment}" ]; then',
-              '      echo "llm-proxy deployment not found in namespace ${llm_proxy_namespace}" >&2',
-              '      kubectl get deployments -A -o wide >&2 || true',
-              '      exit 1',
-              '    fi',
-              '    label_selector="app.kubernetes.io/name=llm-proxy"',
-              '    echo "Scaling ${llm_proxy_namespace}/${llm_proxy_deployment} down before source patch..."',
-              '    kubectl scale "deployment/${llm_proxy_deployment}" -n "${llm_proxy_namespace}" --replicas=0',
-              '    if [ -n "$(kubectl get pods -n "${llm_proxy_namespace}" -l "${label_selector}" -o name)" ]; then',
-              '      kubectl wait --for=delete pod -n "${llm_proxy_namespace}" -l "${label_selector}" --timeout=240s',
-              '    fi',
-              marker,
-            ].join('\n'));
-          }
-
-          const strategicOriginal = 'kubectl patch deployment llm-proxy-llm-proxy -n ${LLM_PROXY_NAMESPACE} --type strategic --patch';
-          const strategicReplacement = 'kubectl patch "deployment/${llm_proxy_deployment}" -n "${llm_proxy_namespace}" --type strategic --patch';
-          if (text.includes(strategicOriginal)) {
-            text = text.replace(strategicOriginal, strategicReplacement);
-          } else if (!text.includes(strategicReplacement)) {
-            throw new Error('llm-proxy strategic patch target not found');
-          }
-
-          const probeMarker = '              livenessProbe: null';
-          if (!text.includes(probeMarker)) {
-            const workingDir = '              workingDir: /opt/app/data';
-            if (!text.includes(workingDir)) {
-              throw new Error('llm-proxy DevSpace workingDir not found');
-            }
-            text = text.replace(workingDir, [
-              '              readinessProbe: null',
-              '              livenessProbe: null',
-              '              startupProbe: null',
-              workingDir,
-            ].join('\n'));
-          }
-
-          const commandOriginal = [
-            '                  set -eu',
-            '                  elapsed=0',
-            '                  while [ ! -f /opt/app/data/go.mod ]; do',
-            '                    sleep 1; elapsed=$((elapsed + 1))',
-            '                    [ "$elapsed" -ge 120 ] && { echo "ERROR: sync timeout" >&2; exit 1; }',
-            '                  done',
-            '                  buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto \\',
-            '                    --path agynio/api/llm/v1 \\',
-            '                    --path agynio/api/users/v1 \\',
-            '                    --path agynio/api/organizations/v1 \\',
-            '                    --path agynio/api/authorization/v1 \\',
-            '                    --path agynio/api/metering/v1 \\',
-            '                    --path agynio/api/ziti_management/v1 \\',
-            '                    --path agynio/api/identity/v1',
-            '                  exec go run ./cmd/llm-proxy',
-          ].join('\n');
-          const commandReplacement = [
-            '                  set -eu',
-            '                  echo "llm-proxy source container waiting for DevSpace sync..."',
-            '                  start=$(date +%s)',
-            '                  required_files="go.mod go.sum buf.gen.yaml buf.yaml cmd/llm-proxy/main.go internal/config/config.go internal/proxy/handler.go"',
-            '                  for source_file in ${required_files}; do',
-            '                    while [ ! -f "/opt/app/data/${source_file}" ]; do',
-            '                      sleep 1',
-            '                      elapsed=$(( $(date +%s) - start ))',
-            '                      [ "$elapsed" -ge 300 ] && { echo "ERROR: sync timeout waiting for ${source_file}" >&2; find /opt/app/data -maxdepth 3 -type f | sort >&2 || true; exit 1; }',
-            '                    done',
-            '                  done',
-            '                  while [ ! -f /opt/app/data/.gen/go/agynio/api/llm/v1/llm.pb.go ]; do',
-            '                    sleep 1',
-            '                    elapsed=$(( $(date +%s) - start ))',
-            '                    [ "$elapsed" -ge 300 ] && { echo "ERROR: sync timeout waiting for generated api" >&2; find /opt/app/data/.gen -maxdepth 5 -type f | sort >&2 || true; exit 1; }',
-            '                  done',
-            '                  echo "llm-proxy generated api synced; starting source server..."',
-            '                  exec go run ./cmd/llm-proxy',
-          ].join('\n');
-          if (text.includes(commandOriginal)) {
-            text = text.replace(commandOriginal, commandReplacement);
-          } else if (!text.includes(commandReplacement)) {
-            throw new Error('llm-proxy DevSpace startup command not found');
-          }
-
-          const rolloutNeedle = [
-            '    )"',
-            '  patch_agents_orchestrator: |-',
-          ].join('\n');
-          const rolloutMarker = 'rollout status "deployment/${llm_proxy_deployment}"';
-          if (!text.includes(rolloutMarker)) {
-            if (!text.includes(rolloutNeedle)) {
-              throw new Error('llm-proxy DevSpace rollout marker not found');
-            }
-            text = text.replace(rolloutNeedle, [
-              '    )"',
-              '    recreate_patch="$(cat <<\'EOF\'',
-              '    {"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}',
-              '    EOF',
-              '    )"',
-              '    kubectl patch "deployment/${llm_proxy_deployment}" -n "${llm_proxy_namespace}" --type merge -p "${recreate_patch}"',
-              '    kubectl scale "deployment/${llm_proxy_deployment}" -n "${llm_proxy_namespace}" --replicas=1',
-              '    kubectl rollout status "deployment/${llm_proxy_deployment}" -n "${llm_proxy_namespace}" --timeout=240s',
-              '  patch_agents_orchestrator: |-',
-            ].join('\n'));
-          }
-
-          const resourcesOriginal = [
-            '              resources:',
-            '                requests:',
-            '                  cpu: 500m',
-            '                  memory: 1Gi',
-            '                limits:',
-            '                  cpu: "2"',
-            '                  memory: 4Gi',
-          ].join('\n');
-          const resourcesReplacement = [
-            '              resources:',
-            '                requests:',
-            '                  cpu: 100m',
-            '                  memory: 512Mi',
-            '                limits:',
-            '                  cpu: "1"',
-            '                  memory: 2Gi',
-          ].join('\n');
-          if (text.includes(resourcesOriginal)) {
-            text = text.replace(resourcesOriginal, resourcesReplacement);
-          } else if (!text.includes(resourcesReplacement)) {
-            throw new Error('llm-proxy DevSpace resources block not found');
-          }
-          fs.writeFileSync(path, text);
-          NODE
+          mkdir -p dist
+          CGO_ENABLED=0 go build -o dist/llm-proxy-devspace ./cmd/llm-proxy
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import re
+          p = Path('devspace.yaml')
+          s = p.read_text()
+          pattern = r'                  set -eu\n.*?                  exec go run ./cmd/llm-proxy'
+          replacement = '                  set -eu\n                  elapsed=0\n                  while [ ! -x /opt/app/data/dist/llm-proxy-devspace ]; do\n                    sleep 1; elapsed=$((elapsed + 1))\n                    [ "$elapsed" -ge 300 ] && { echo "ERROR: source binary sync timeout" >&2; exit 1; }\n                  done\n                  exec /opt/app/data/dist/llm-proxy-devspace'
+          s, count = re.subn(pattern, lambda _: replacement, s, flags=re.S)
+          assert count == 1, 'pinned llm-proxy startup contract changed'
+          p.write_text(s)
+          PYCODE
+          deployment="$(kubectl get deployment -n agyn-platform -l app.kubernetes.io/name=llm-proxy -o jsonpath='{.items[0].metadata.name}')"
+          test -n "${deployment}"
+          kubectl patch deployment "${deployment}" -n agyn-platform --type merge -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
           devspace dev
       # Validation only: llm-proxy Ziti binding is configured by the platform image.
       - name: Verify llm-proxy Ziti service binding
