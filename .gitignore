@@ -5,3 +5,6 @@
 
 # DevSpace writes caches and logs here during a source run.
 .devspace/
+
+# Reviewed API checkout used by CI; generated bindings remain untracked.
+.ci-api/
