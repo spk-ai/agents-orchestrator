@@ -250,7 +250,7 @@ jobs:
           set -euo pipefail
           dump_authorization_model_diagnostics() {
             echo "== authorization model diagnostics ==" >&2
-            kubectl get secret authorization-openfga -n agyn-platform -o yaml >&2 || true
+            kubectl get secret authorization-openfga -n agyn-platform -o name >&2 || true
             kubectl get application authorization -n argocd -o yaml >&2 || true
             kubectl get deployment authorization -n agyn-platform -o yaml >&2 || true
             kubectl get svc -A -o wide | grep -i openfga >&2 || true
@@ -266,13 +266,13 @@ jobs:
               --type merge \
               -p '{"spec":{"syncPolicy":{"automated":null}}}'
           fi
-          openfga_namespace="openfga"
+          openfga_namespace="agyn-platform"
           openfga_service="$(kubectl get svc -n "${openfga_namespace}" -l app.kubernetes.io/name=openfga -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
           if [ -z "${openfga_service}" ] && kubectl get svc openfga -n "${openfga_namespace}" >/dev/null 2>&1; then
             openfga_service="openfga"
           fi
           if [ -z "${openfga_service}" ]; then
-            openfga_ref="$(kubectl get svc -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' | awk 'tolower($2) ~ /openfga/ { print; exit }')"
+            openfga_ref="$(kubectl get svc -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' | awk '!found && tolower($2) ~ /openfga/ { print; found=1 }')"
             if [ -n "${openfga_ref}" ]; then
               openfga_namespace="$(printf '%s' "${openfga_ref}" | awk '{ print $1 }')"
               openfga_service="$(printf '%s' "${openfga_ref}" | awk '{ print $2 }')"

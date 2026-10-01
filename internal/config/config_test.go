@@ -1,7 +1,10 @@
 package config
 
 import (
+	"context"
 	"os"
+	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -475,5 +478,29 @@ func TestFromEnvZitiRuntimeControllerPortInvalid(t *testing.T) {
 	_, err := FromEnv()
 	if err == nil {
 		t.Fatal("expected ZITI_RUNTIME_CONTROLLER_PORT parse error")
+	}
+}
+
+// kubectl writes many Service rows. An early-exit consumer makes its producer
+// fail with SIGPIPE, which aborts discovery when Actions enables pipefail.
+func TestE2EOpenFGAServiceDiscoveryDrainsProducer(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/e2e.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector := regexp.MustCompile(`awk '([^'\n]*tolower\(\$2\)[^'\n]*)'`).FindSubmatch(data)
+	if len(selector) != 2 {
+		t.Fatal("OpenFGA fallback selector missing")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "bash", "-c", `set -o pipefail
+{ printf 'agyn-platform\topenfga\n'; for i in {1..10000}; do printf 'fixture\tservice-%s\n' "$i"; done; printf 'other\topenfga-secondary\n'; } | awk "$1"`, "--", string(selector[1]))
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("service discovery pipeline failed: %v: %s", err, output)
+	}
+	if string(output) != "agyn-platform\topenfga\n" {
+		t.Fatalf("unexpected selected service: %q", output)
 	}
 }
