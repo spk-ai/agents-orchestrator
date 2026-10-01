@@ -12,6 +12,8 @@ RUN curl -sSL \
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
 
+RUN apk add --no-cache git
+
 WORKDIR /src
 
 COPY --from=buf /usr/local/bin/buf /usr/local/bin/buf
@@ -22,24 +24,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 COPY buf.gen.yaml buf.yaml ./
-RUN buf generate buf.build/agynio/api \
-    --include-imports \
-    --path agynio/api/runner/v1 \
-    --path agynio/api/runners/v1 \
-    --path agynio/api/threads/v1 \
-    --path agynio/api/notifications/v1 \
-    --path agynio/api/ziti_management/v1 \
-    --path agynio/api/groups/v1 \
-    --path agynio/api/identity/v1 \
-    --path agynio/api/llm/v1 \
-    --path agynio/api/users/v1 \
-    --path agynio/api/tracing/v1 \
-    --path agynio/api/metering/v1 \
-    --path agynio/api/agents/v1 \
-    --path agynio/api/image_proxy/v1 \
-    --path agynio/api/images/v1 \
-    --path agynio/api/organizations/v1 \
-    --path agynio/api/secrets/v1
+RUN buf generate --include-imports
 
 COPY . .
 

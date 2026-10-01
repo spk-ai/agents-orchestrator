@@ -42,3 +42,6 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+      - name: Build production image with pinned API
+        run: docker build --progress=plain -t native-service:ci .

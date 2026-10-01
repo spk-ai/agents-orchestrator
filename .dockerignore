@@ -1,0 +1,8 @@
+.git/
+.gen/
+internal/.gen/
+.ci-api/
+.e2e-tooling/
+.e2e-deps/
+e2e/
+api/

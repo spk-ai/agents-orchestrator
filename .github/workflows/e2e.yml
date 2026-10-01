@@ -9,57 +9,57 @@ on:
       k8s_runner_ref:
         description: k8s-runner ref to deploy from.
         required: false
-        default: main
+        default: ac294515ea03694d7c45b82a7d066af74de9dac2
       agents_ref:
         description: Agents ref to deploy from.
         required: false
-        default: main
+        default: df88f90f6aee77647912e7336e03d43545a2a6a4
       authorization_ref:
         description: Authorization ref to deploy from.
         required: false
-        default: main
+        default: 30581ca4f834ad8a0a63e14bd0f465333b3929e9
       runners_ref:
         description: Runners ref to deploy from.
         required: false
-        default: main
+        default: 7653b8edf9b218085c78f42ba665520a4aaa5408
       identity_ref:
         description: Identity ref to deploy from.
         required: false
-        default: main
+        default: 47aaabc67acfad0b80ca97d5e1b27f96b670f27f
       threads_ref:
         description: Threads ref to deploy from.
         required: false
-        default: main
+        default: 066fe51e57343b130b38af09d061a6540e0e8e20
       agynd_cli_ref:
         description: agynd-cli ref to build workload daemon from.
         required: false
-        default: main
+        default: 495920a92cc359e0693e8710f11469240bd5a770
       expose_ref:
         description: Expose ref to deploy from.
         required: false
-        default: main
+        default: da7ef4ffd81fcd829dba6e35c6467e958e209df5
       gateway_ref:
         description: Gateway ref to deploy from.
         required: false
-        default: main
+        default: 0ee317b7bcabe17bb43baf996f0ceedef6b4a7ed
       llm_proxy_ref:
         description: llm-proxy ref to deploy from.
         required: false
-        default: main
+        default: 212b0a8b90c377cc76ca00c389434921270b572a
 
 # Init images are resolved to the newest published release by the run-tests
 # action. Pinning one here opts this workflow out of every fix shipped after it.
 env:
-  K8S_RUNNER_REF: main
-  AGENTS_REF: main
-  AUTHORIZATION_REF: main
-  RUNNERS_REF: main
-  IDENTITY_REF: main
-  THREADS_REF: main
-  AGYND_CLI_REF: main
-  EXPOSE_REF: main
-  GATEWAY_REF: main
-  LLM_PROXY_REF: main
+  K8S_RUNNER_REF: ac294515ea03694d7c45b82a7d066af74de9dac2
+  AGENTS_REF: df88f90f6aee77647912e7336e03d43545a2a6a4
+  AUTHORIZATION_REF: 30581ca4f834ad8a0a63e14bd0f465333b3929e9
+  RUNNERS_REF: 7653b8edf9b218085c78f42ba665520a4aaa5408
+  IDENTITY_REF: 47aaabc67acfad0b80ca97d5e1b27f96b670f27f
+  THREADS_REF: 066fe51e57343b130b38af09d061a6540e0e8e20
+  AGYND_CLI_REF: 495920a92cc359e0693e8710f11469240bd5a770
+  EXPOSE_REF: da7ef4ffd81fcd829dba6e35c6467e958e209df5
+  GATEWAY_REF: 0ee317b7bcabe17bb43baf996f0ceedef6b4a7ed
+  LLM_PROXY_REF: 212b0a8b90c377cc76ca00c389434921270b572a
 
 permissions:
   contents: read
@@ -76,11 +76,24 @@ jobs:
       - name: Checkout service
         uses: actions/checkout@v4
 
+      - name: Checkout pinned E2E tooling
+        uses: actions/checkout@v4
+        with:
+          repository: agynio/e2e
+          ref: 435b549a937129b6858e7314648eb690894209fe
+          path: .e2e-tooling
+          persist-credentials: false
+
+      - name: Prepare disposable VM image repair and diagnostics
+        run: python3 .github/e2e/prepare.py .e2e-tooling
+
       - name: Provision cluster
-        uses: agynio/e2e/.github/actions/provision-vm@main
+        uses: ./.e2e-tooling/.github/actions/provision-vm
+        with:
+          agyn-cli-version: v0.19.0
 
       - name: Setup DevSpace
-        uses: agynio/e2e/.github/actions/setup-devspace@main
+        uses: agynio/e2e/.github/actions/setup-devspace@435b549a937129b6858e7314648eb690894209fe
 
       - name: Install buf
         uses: bufbuild/buf-setup-action@v1
@@ -142,7 +155,7 @@ jobs:
         working-directory: .e2e-deps/agynd-cli
         run: |-
           set -euo pipefail
-          buf generate buf.build/agynio/api
+          buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto
           mkdir -p .build
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o .build/agynd ./cmd/agynd
 
@@ -423,7 +436,7 @@ jobs:
           }
           trap dump_identity_source_diagnostics ERR
           mkdir -p dist
-          buf generate buf.build/agynio/api --path agynio/api/identity/v1 --path agynio/api/authorization/v1
+          buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto --path agynio/api/identity/v1 --path agynio/api/authorization/v1
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dist/identity-devspace ./cmd/identity-service
           devspace dev
 
@@ -582,7 +595,7 @@ jobs:
             kubectl get events -n platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_threads_source_diagnostics ERR
-          buf generate buf.build/agynio/api --path agynio/api/threads/v1 --path agynio/api/notifications/v1 --path agynio/api/identity/v1 --path agynio/api/metering/v1 --path agynio/api/authorization/v1 --path agynio/api/agents/v1
+          buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto --path agynio/api/threads/v1 --path agynio/api/notifications/v1 --path agynio/api/identity/v1 --path agynio/api/metering/v1 --path agynio/api/authorization/v1 --path agynio/api/agents/v1
           CGO_ENABLED=0 go test ./internal/server -run 'TestCreateThreadStoresAgentInstanceForAgentClassParticipant' -count=1
           devspace dev
 
@@ -627,7 +640,7 @@ jobs:
       - name: Checkout runners
         uses: actions/checkout@v4
         with:
-          repository: agynio/runners
+          repository: spk-ai/runners
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.runners_ref || env.RUNNERS_REF }}
           path: .e2e-deps/runners
 
@@ -648,7 +661,7 @@ jobs:
           # runners main carries the agent-instance work (owner_kind/owner_id,
           # ListWorkloadsByAgentInstance, ListVolumesByAgentInstance) since #71,
           # so the patch that used to add it now duplicates declarations.
-          buf generate buf.build/agynio/api \
+          buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto \
             --include-imports \
             --path agynio/api/agents/v1 \
             --path agynio/api/runners/v1 \
@@ -729,7 +742,7 @@ jobs:
               --type merge \
               -p '{"spec":{"syncPolicy":{"automated":null}}}'
           fi
-          buf generate buf.build/agynio/api \
+          buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto \
             --include-imports \
             --path agynio/api/expose/v1 \
             --path agynio/api/ziti_management/v1 \
@@ -751,7 +764,7 @@ jobs:
       - name: Checkout k8s-runner
         uses: actions/checkout@v4
         with:
-          repository: agynio/k8s-runner
+          repository: spk-ai/k8s-runner
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.k8s_runner_ref || env.K8S_RUNNER_REF }}
           path: .e2e-deps/k8s-runner
 
@@ -1230,7 +1243,7 @@ jobs:
             kubectl get events -n platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_gateway_source_diagnostics ERR
-          buf generate buf.build/agynio/api
+          buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto
           CGO_ENABLED=0 go test ./cmd/gateway ./internal/identity ./internal/zitimgmtclient
           node <<'NODE'
           const fs = require('fs');
@@ -1346,8 +1359,8 @@ jobs:
       - name: Checkout api
         uses: actions/checkout@v4
         with:
-          repository: agynio/api
-          ref: main
+          repository: spk-ai/api
+          ref: ce64da8680c39a13f7174c3146b38f3bfcc03037
           path: api
 
       - name: Checkout llm-proxy
@@ -1472,7 +1485,7 @@ jobs:
             '                    sleep 1; elapsed=$((elapsed + 1))',
             '                    [ "$elapsed" -ge 120 ] && { echo "ERROR: sync timeout" >&2; exit 1; }',
             '                  done',
-            '                  buf generate buf.build/agynio/api \\',
+            '                  buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto \\',
             '                    --path agynio/api/llm/v1 \\',
             '                    --path agynio/api/users/v1 \\',
             '                    --path agynio/api/organizations/v1 \\',
@@ -1622,7 +1635,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: agynio/e2e
-          ref: main
+          ref: 435b549a937129b6858e7314648eb690894209fe
           path: e2e
 
       - name: Patch E2E default model endpoint
@@ -1729,6 +1742,7 @@ jobs:
           E2E_GO_TEST_RUN: "TestAgentAgynCLIWaitToAnotherAgent|TestMCPToolsE2E|TestWorkloadStartRetryPolicyFastRetry"
           E2E_SKIP_BUF_GENERATE: "true"
         with:
+          e2e-ref: 435b549a937129b6858e7314648eb690894209fe
           service: agents_orchestrator
           include_smoke: "false"
 
@@ -1738,6 +1752,7 @@ jobs:
           E2E_SUITES: go-core playwright-chat-app
           E2E_SKIP_BUF_GENERATE: "true"
         with:
+          e2e-ref: 435b549a937129b6858e7314648eb690894209fe
           service: agents_orchestrator
           include_smoke: "false"
 
