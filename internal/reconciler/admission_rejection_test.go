@@ -94,3 +94,40 @@ func TestAmbiguousAdmissionErrorsRetainResources(t *testing.T) {
 		})
 	}
 }
+
+func TestReopenedAllocationRejectsUnsupportedRegistryAndMissingReceipt(t *testing.T) {
+	for _, sandbox := range []bool{false, true} {
+		for _, mode := range []string{"unsupported", "missing receipt"} {
+			t.Run(map[bool]string{false: "agent", true: "sandbox"}[sandbox]+"/"+mode, func(t *testing.T) {
+				f := newPreparedControllerFixture(t, sandbox)
+				f.v.LifecycleRevision = 3
+				f.created[0].checked = proto.Clone(f.v).(*runnersv1.Volume)
+				update := f.registry.updateVolumeChecked
+				calls := 0
+				f.registry.updateVolumeChecked = func(ctx context.Context, req *runnersv1.UpdateVolumeCheckedRequest, opts ...grpc.CallOption) (*runnersv1.UpdateVolumeCheckedResponse, error) {
+					if req.GetBindAnchor() != nil {
+						t.Fatal("reopened allocation downgraded to legacy operation")
+					}
+					if req.GetBindReopenedAnchor() != nil {
+						calls++
+						if mode == "unsupported" {
+							return nil, status.Error(codes.Unimplemented, "unknown operation")
+						}
+						resp, err := update(ctx, req, opts...)
+						if err == nil {
+							resp.Volume.AnchorReservation.AllocationRevision = 0
+						}
+						return resp, err
+					}
+					return update(ctx, req, opts...)
+				}
+				if _, err := f.start(); err == nil {
+					t.Fatal("unsupported allocation contract was accepted")
+				}
+				if calls != 1 || f.prepares != 0 || f.activations != 0 {
+					t.Fatal("missing registry capability permitted native preparation or retry")
+				}
+			})
+		}
+	}
+}

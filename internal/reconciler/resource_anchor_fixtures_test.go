@@ -118,7 +118,7 @@ func (f *preparedControllerFixture) installAnchoredProtocol() {
 	}
 	volumeUpdate := f.registry.updateVolumeChecked
 	f.registry.updateVolumeChecked = func(ctx context.Context, req *runnersv1.UpdateVolumeCheckedRequest, opts ...grpc.CallOption) (*runnersv1.UpdateVolumeCheckedResponse, error) {
-		if op := req.GetBindAnchor(); op != nil {
+		if op := checkedVolumeAnchorBinding(req); op != nil {
 			if req.Id != f.v.Meta.Id || req.ExpectedRevision != f.v.LifecycleRevision || f.v.ResourceAnchor != nil || f.v.BoundInstance != nil ||
 				f.w.Preparation.Phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_RESERVED || op.WorkloadId != f.w.Meta.Id ||
 				op.ExpectedPreparationRevision != f.w.Preparation.Revision || op.ExpectedAnchorRevision != f.w.Preparation.Resources.Revision {

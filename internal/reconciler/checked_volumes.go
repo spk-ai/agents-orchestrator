@@ -238,7 +238,7 @@ func (r *Reconciler) updateCheckedVolume(ctx context.Context, v *runnersv1.Volum
 	if !sameVolumeIdentity(v, next) || next.LifecycleRevision != v.LifecycleRevision+1 {
 		return nil, checkedVolumeError(v, "checked update changed identity or returned the wrong revision")
 	}
-	if req.GetBindAnchor() == nil && (!proto.Equal(v.ResourceAnchor, next.ResourceAnchor) || !proto.Equal(v.AnchorReservation, next.AnchorReservation) ||
+	if checkedVolumeAnchorBinding(req) == nil && (!proto.Equal(v.ResourceAnchor, next.ResourceAnchor) || !proto.Equal(v.AnchorReservation, next.AnchorReservation) ||
 		!proto.Equal(v.AnchorAdoption, next.AnchorAdoption)) {
 		return nil, checkedVolumeError(v, "checked update changed persistent native ownership")
 	}
@@ -250,11 +250,12 @@ func (r *Reconciler) updateCheckedVolume(ctx context.Context, v *runnersv1.Volum
 	}
 	valid := false
 	switch op := req.Operation.(type) {
-	case *runnersv1.UpdateVolumeCheckedRequest_BindAnchor:
-		valid = v.ResourceAnchor == nil && v.BoundInstance == nil && next.Status == runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING &&
-			next.BoundInstance == nil && next.RemovalIntent == nil && proto.Equal(next.ResourceAnchor, op.BindAnchor.GetAnchor()) &&
-			proto.Equal(next.AnchorReservation, &runnersv1.VolumeAnchorReservation{WorkloadId: op.BindAnchor.GetWorkloadId(),
-				PreparationRevision: op.BindAnchor.GetExpectedPreparationRevision(), ResourceRevision: op.BindAnchor.GetExpectedAnchorRevision(), AllocationRevision: allocationReceiptRevision(next.LifecycleRevision)})
+	case *runnersv1.UpdateVolumeCheckedRequest_BindAnchor, *runnersv1.UpdateVolumeCheckedRequest_BindReopenedAnchor:
+		binding := checkedVolumeAnchorBinding(req)
+		valid = (req.GetBindReopenedAnchor() != nil) == (v.LifecycleRevision > 1) && v.ResourceAnchor == nil && v.BoundInstance == nil && next.Status == runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING &&
+			next.BoundInstance == nil && next.RemovalIntent == nil && proto.Equal(next.ResourceAnchor, binding.GetAnchor()) &&
+			proto.Equal(next.AnchorReservation, &runnersv1.VolumeAnchorReservation{WorkloadId: binding.GetWorkloadId(),
+				PreparationRevision: binding.GetExpectedPreparationRevision(), ResourceRevision: binding.GetExpectedAnchorRevision(), AllocationRevision: allocationReceiptRevision(next.LifecycleRevision)})
 	case *runnersv1.UpdateVolumeCheckedRequest_Bind:
 		valid = next.Status == runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE && proto.Equal(next.BoundInstance, op.Bind.GetInstance())
 	case *runnersv1.UpdateVolumeCheckedRequest_BeginRemoval:
@@ -418,4 +419,11 @@ func originalAllocationRevision(receipt *runnersv1.VolumeAnchorReservation) uint
 		return 2
 	}
 	return receipt.GetAllocationRevision()
+}
+
+func checkedVolumeAnchorBinding(req *runnersv1.UpdateVolumeCheckedRequest) *runnersv1.BindVolumeResourceAnchor {
+	if binding := req.GetBindReopenedAnchor(); binding != nil {
+		return binding
+	}
+	return req.GetBindAnchor()
 }
