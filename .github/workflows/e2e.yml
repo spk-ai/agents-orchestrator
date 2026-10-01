@@ -9,7 +9,7 @@ on:
       k8s_runner_ref:
         description: k8s-runner ref to deploy from.
         required: false
-        default: f3458d4d028e16d1abf60905a35c695294e11369
+        default: 182d127011049d29b055e7ecae9f994a2d6b9f31
       agents_ref:
         description: Agents ref to deploy from.
         required: false
@@ -50,7 +50,7 @@ on:
 # Init images are resolved to the newest published release by the run-tests
 # action. Pinning one here opts this workflow out of every fix shipped after it.
 env:
-  K8S_RUNNER_REF: f3458d4d028e16d1abf60905a35c695294e11369
+  K8S_RUNNER_REF: 182d127011049d29b055e7ecae9f994a2d6b9f31
   AGENTS_REF: df88f90f6aee77647912e7336e03d43545a2a6a4
   AUTHORIZATION_REF: 30581ca4f834ad8a0a63e14bd0f465333b3929e9
   RUNNERS_REF: 31df7a2fb51736ff2c0e05968c39636808596db5
@@ -453,6 +453,14 @@ jobs:
             kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_identity_source_diagnostics ERR
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          p = Path('devspace.yaml')
+          s = p.read_text()
+          old = '  IDENTITY_NAMESPACE: platform'
+          assert s.count(old) == 1, 'pinned identity namespace contract changed'
+          p.write_text(s.replace(old, '  IDENTITY_NAMESPACE: agyn-platform'))
+          PYCODE
           mkdir -p dist
           buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto --path agynio/api/identity/v1 --path agynio/api/authorization/v1
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dist/identity-devspace ./cmd/identity-service
@@ -613,6 +621,17 @@ jobs:
             kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_threads_source_diagnostics ERR
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          p = Path('devspace.yaml')
+          s = p.read_text()
+          old = '  THREADS_NAMESPACE: platform'
+          assert s.count(old) == 1, 'pinned threads namespace contract changed'
+          s = s.replace(old, '  THREADS_NAMESPACE: agyn-platform')
+          old = 'buf generate buf.build/agynio/api'
+          assert s.count(old) == 1, 'pinned threads API generation contract changed'
+          p.write_text(s.replace(old, 'buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto'))
+          PYCODE
           buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto --path agynio/api/threads/v1 --path agynio/api/notifications/v1 --path agynio/api/identity/v1 --path agynio/api/metering/v1 --path agynio/api/authorization/v1 --path agynio/api/agents/v1
           CGO_ENABLED=0 go test ./internal/server -run 'TestCreateThreadStoresAgentInstanceForAgentClassParticipant' -count=1
           devspace dev
@@ -808,241 +827,8 @@ jobs:
           trap dump_k8s_runner_source_diagnostics ERR
           devspace run deploy
 
-      # Validation shim only: source-of-truth workload egress belongs in k8s-runner.
-      # Keep this PR check strict while regular E2E consumes main refs.
-      - name: Allow workload Ziti egress
-        run: |-
-          set -euo pipefail
-          service_endpoint_ips() {
-            kubectl get endpoints "$1" -n "$2" -o jsonpath='{range .subsets[*].addresses[*]}{.ip}{" "}{end}'
-          }
-          # Whichever resolver this cluster gives workloads. bootstrap ran a
-          # dedicated ziti-workload-dns; the platform VM does not -- it answers
-          # the ziti hostnames from CoreDNS via coredns-custom rewrites, so the
-          # address to allow is kube-dns.
-          dns_service=ziti-workload-dns
-          dns_namespace=ziti
-          if ! kubectl get service "${dns_service}" -n "${dns_namespace}" >/dev/null 2>&1; then
-            dns_service=kube-dns
-            dns_namespace=kube-system
-          fi
-          echo "workload DNS: ${dns_service}.${dns_namespace}"
-          ziti_dns_ip="$(kubectl get service "${dns_service}" -n "${dns_namespace}" -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${ziti_dns_ip}" ]; then
-            echo "${dns_service} ClusterIP is empty" >&2
-            exit 1
-          fi
-          ziti_dns_endpoint_ips="$(service_endpoint_ips "${dns_service}" "${dns_namespace}")"
-          if [ -z "${ziti_dns_endpoint_ips}" ]; then
-            echo "${dns_service} endpoints are empty" >&2
-            exit 1
-          fi
-          ziti_controller_ip="$(kubectl get service ziti-controller-client -n ziti -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${ziti_controller_ip}" ]; then
-            echo "ziti-controller-client ClusterIP is empty" >&2
-            exit 1
-          fi
-          ziti_controller_endpoint_ips="$(service_endpoint_ips ziti-controller-client ziti)"
-          if [ -z "${ziti_controller_endpoint_ips}" ]; then
-            echo "ziti-controller-client endpoints are empty" >&2
-            exit 1
-          fi
-          ziti_router_ip="$(kubectl get service ziti-router-edge -n ziti -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${ziti_router_ip}" ]; then
-            echo "ziti-router-edge ClusterIP is empty" >&2
-            exit 1
-          fi
-          ziti_router_endpoint_ips="$(service_endpoint_ips ziti-router-edge ziti)"
-          if [ -z "${ziti_router_endpoint_ips}" ]; then
-            echo "ziti-router-edge endpoints are empty" >&2
-            exit 1
-          fi
-          istio_gateway_ip="$(kubectl get service istio-ingressgateway -n istio-gateway -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${istio_gateway_ip}" ]; then
-            echo "istio-ingressgateway ClusterIP is empty" >&2
-            exit 1
-          fi
-          istio_gateway_endpoint_ips="$(service_endpoint_ips istio-ingressgateway istio-gateway)"
-          if [ -z "${istio_gateway_endpoint_ips}" ]; then
-            echo "istio-ingressgateway endpoints are empty" >&2
-            exit 1
-          fi
-          agents_service_ip="$(kubectl get service agents -n agyn-platform -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${agents_service_ip}" ]; then
-            echo "agents ClusterIP is empty" >&2
-            exit 1
-          fi
-          agents_endpoint_ips="$(service_endpoint_ips agents platform)"
-          if [ -z "${agents_endpoint_ips}" ]; then
-            echo "agents endpoints are empty" >&2
-            exit 1
-          fi
-          runners_service_ip="$(kubectl get service runners -n agyn-platform -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${runners_service_ip}" ]; then
-            echo "runners ClusterIP is empty" >&2
-            exit 1
-          fi
-          runners_endpoint_ips="$(service_endpoint_ips runners platform)"
-          if [ -z "${runners_endpoint_ips}" ]; then
-            echo "runners endpoints are empty" >&2
-            exit 1
-          fi
-          apply_workload_service_alias() {
-            service_name="$1"
-            endpoint_ips="$2"
-            cat <<EOF_ALIAS_SERVICE | kubectl apply -f -
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: ${service_name}
-            namespace: agyn-workloads
-          spec:
-            ports:
-              - name: grpc
-                protocol: TCP
-                port: 50051
-                targetPort: 50051
-          EOF_ALIAS_SERVICE
-            {
-              cat <<EOF_ALIAS_SLICE
-          apiVersion: discovery.k8s.io/v1
-          kind: EndpointSlice
-          metadata:
-            name: ${service_name}-platform-source
-            namespace: agyn-workloads
-            labels:
-              kubernetes.io/service-name: ${service_name}
-          addressType: IPv4
-          ports:
-            - name: grpc
-              protocol: TCP
-              port: 50051
-          endpoints:
-          EOF_ALIAS_SLICE
-              for endpoint_ip in ${endpoint_ips}; do
-                cat <<EOF_ALIAS_SLICE
-            - addresses:
-                - ${endpoint_ip}
-              conditions:
-                ready: true
-          EOF_ALIAS_SLICE
-              done
-            } | kubectl apply -f -
-          }
-          apply_workload_service_alias agents "${agents_endpoint_ips}"
-          apply_workload_service_alias runners "${runners_endpoint_ips}"
-          agents_alias_service_ip="$(kubectl get service agents -n agyn-workloads -o jsonpath='{.spec.clusterIP}')"
-          runners_alias_service_ip="$(kubectl get service runners -n agyn-workloads -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${agents_alias_service_ip}" ] || [ -z "${runners_alias_service_ip}" ]; then
-            echo "workload namespace service alias ClusterIP is empty" >&2
-            kubectl get service -n agyn-workloads agents runners -o wide >&2 || true
-            kubectl get endpointslice -n agyn-workloads -l 'kubernetes.io/service-name in (agents,runners)' -o wide >&2 || true
-            exit 1
-          fi
-
-          add_tcp_egress_ip() {
-            patch="${patch},{\"op\":\"add\",\"path\":\"/spec/egress/-\",\"value\":{\"to\":[{\"ipBlock\":{\"cidr\":\"$1/32\"}}],\"ports\":[{\"protocol\":\"TCP\",\"port\":$2}]}}"
-          }
-
-          add_platform_backend_egress() {
-            patch="${patch},{\"op\":\"add\",\"path\":\"/spec/egress/-\",\"value\":{\"to\":[{\"namespaceSelector\":{\"matchLabels\":{\"kubernetes.io/metadata.name\":\"platform\"}},\"podSelector\":{\"matchExpressions\":[{\"key\":\"app.kubernetes.io/name\",\"operator\":\"In\",\"values\":[\"agents\",\"runners\"]}]}}],\"ports\":[{\"protocol\":\"TCP\",\"port\":50051}]}}"
-          }
-
-          patch='[{"op":"add","path":"/spec/egress/-","value":{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ziti"}},"podSelector":{"matchLabels":{"app.kubernetes.io/name":"ziti-workload-dns"}}}],"ports":[{"protocol":"UDP","port":53},{"protocol":"TCP","port":53}]}},{"op":"add","path":"/spec/egress/-","value":{"to":[{"ipBlock":{"cidr":"'"${ziti_dns_ip}"'/32"}}],"ports":[{"protocol":"UDP","port":53},{"protocol":"TCP","port":53}]}}'
-          for ziti_dns_endpoint_ip in ${ziti_dns_endpoint_ips}; do
-            patch="${patch},{\"op\":\"add\",\"path\":\"/spec/egress/-\",\"value\":{\"to\":[{\"ipBlock\":{\"cidr\":\"${ziti_dns_endpoint_ip}/32\"}}],\"ports\":[{\"protocol\":\"UDP\",\"port\":53},{\"protocol\":\"TCP\",\"port\":53}]}}"
-          done
-          add_tcp_egress_ip "${istio_gateway_ip}" 443
-          for istio_gateway_endpoint_ip in ${istio_gateway_endpoint_ips}; do
-            add_tcp_egress_ip "${istio_gateway_endpoint_ip}" 443
-          done
-          add_platform_backend_egress
-          add_tcp_egress_ip "${agents_alias_service_ip}" 50051
-          add_tcp_egress_ip "${runners_alias_service_ip}" 50051
-          add_tcp_egress_ip "${agents_service_ip}" 50051
-          for agents_endpoint_ip in ${agents_endpoint_ips}; do
-            add_tcp_egress_ip "${agents_endpoint_ip}" 50051
-          done
-          add_tcp_egress_ip "${runners_service_ip}" 50051
-          for runners_endpoint_ip in ${runners_endpoint_ips}; do
-            add_tcp_egress_ip "${runners_endpoint_ip}" 50051
-          done
-          add_tcp_egress_ip "${ziti_controller_ip}" 2496
-          for ziti_controller_endpoint_ip in ${ziti_controller_endpoint_ips}; do
-            add_tcp_egress_ip "${ziti_controller_endpoint_ip}" 2496
-            add_tcp_egress_ip "${ziti_controller_endpoint_ip}" 1280
-          done
-          add_tcp_egress_ip "${ziti_router_ip}" 2496
-          for ziti_router_endpoint_ip in ${ziti_router_endpoint_ips}; do
-            add_tcp_egress_ip "${ziti_router_endpoint_ip}" 2496
-            add_tcp_egress_ip "${ziti_router_endpoint_ip}" 3022
-          done
-          patch="${patch}]"
-
-          kubectl patch networkpolicy agent-workload-egress \
-            -n agyn-workloads \
-            --type=json \
-            -p "${patch}"
-          kubectl patch networkpolicy ziti-workload-dns \
-            -n ziti \
-            --type=json \
-            -p '[{"op":"add","path":"/spec/ingress/-","value":{"ports":[{"protocol":"UDP","port":53},{"protocol":"TCP","port":53}]}}]'
-          kubectl wait deployment/ziti-workload-dns -n ziti --for=condition=Available --timeout=180s
-          kubectl get networkpolicy agent-workload-egress -n agyn-workloads -o yaml
-          kubectl get networkpolicy ziti-workload-dns -n ziti -o yaml
-          kubectl get service -n agyn-workloads agents runners -o wide
-          kubectl get endpointslice -n agyn-workloads -l 'kubernetes.io/service-name in (agents,runners)' -o wide
-          kubectl get service,endpoints,pods -n ziti -l app.kubernetes.io/name=ziti-workload-dns -o wide
-
-      # Validation shim only: source-of-truth workload DNS belongs in the platform image.
-      # It enforces ziti.agyn.dev -> ziti-controller-client and ziti-router.agyn.dev -> ziti-router-edge.
-      - name: Patch workload Ziti DNS runtime target
-        run: |-
-          set -euo pipefail
-          current_target="$(kubectl get configmap ziti-workload-dns -n ziti -o jsonpath='{.data.ziti\.db}' | awk '$1 == "@" && $2 == "IN" && $3 == "A" {print $4; exit}')"
-          current_router_target="$(kubectl get configmap ziti-workload-dns -n ziti -o jsonpath='{.data.ziti-router\.db}' | awk '$1 == "@" && $2 == "IN" && $3 == "A" {print $4; exit}')"
-          ziti_controller_ip="$(kubectl get service ziti-controller-client -n ziti -o jsonpath='{.spec.clusterIP}')"
-          ziti_router_ip="$(kubectl get service ziti-router-edge -n ziti -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${current_target}" ]; then
-            echo "ziti-workload-dns ziti.db target is empty" >&2
-            kubectl get configmap ziti-workload-dns -n ziti -o yaml >&2 || true
-            exit 1
-          fi
-          if [ -z "${current_router_target}" ]; then
-            echo "ziti-workload-dns ziti-router.db target is empty" >&2
-            kubectl get configmap ziti-workload-dns -n ziti -o yaml >&2 || true
-            exit 1
-          fi
-          if [ -z "${ziti_controller_ip}" ]; then
-            echo "ziti-controller-client ClusterIP is empty" >&2
-            kubectl get service ziti-controller-client -n ziti -o yaml >&2 || true
-            exit 1
-          fi
-          if [ -z "${ziti_router_ip}" ]; then
-            echo "ziti-router-edge ClusterIP is empty" >&2
-            kubectl get service ziti-router-edge -n ziti -o yaml >&2 || true
-            exit 1
-          fi
-          if [ "${current_target}" != "${ziti_controller_ip}" ] || [ "${current_router_target}" != "${ziti_router_ip}" ]; then
-            echo "Patching ziti.agyn.dev workload DNS from ${current_target} to ziti-controller-client ${ziti_controller_ip} and ziti-router.agyn.dev from ${current_router_target} to ziti-router-edge ${ziti_router_ip}."
-            kubectl get configmap ziti-workload-dns -n ziti -o jsonpath='{.data.Corefile}' > /tmp/ziti-workload-Corefile
-            kubectl get configmap ziti-workload-dns -n ziti -o jsonpath='{.data.ziti\.db}' \
-              | sed -E "s/^((@|ns) IN A )[^[:space:]]+/\1${ziti_controller_ip}/" \
-              > /tmp/ziti-workload-ziti.db
-            kubectl get configmap ziti-workload-dns -n ziti -o jsonpath='{.data.ziti-router\.db}' \
-              | sed -E "s/^((@|ns) IN A )[^[:space:]]+/\1${ziti_router_ip}/" \
-              > /tmp/ziti-workload-ziti-router.db
-            kubectl create configmap ziti-workload-dns \
-              -n ziti \
-              --from-file=Corefile=/tmp/ziti-workload-Corefile \
-              --from-file=ziti.db=/tmp/ziti-workload-ziti.db \
-              --from-file=ziti-router.db=/tmp/ziti-workload-ziti-router.db \
-              --dry-run=client \
-              -o yaml | kubectl apply -f -
-            kubectl rollout restart deployment/ziti-workload-dns -n ziti
-          fi
-          kubectl rollout status deployment/ziti-workload-dns -n ziti --timeout=180s
-          kubectl get configmap ziti-workload-dns -n ziti -o yaml
+      - name: Verify disposable VM native network inventory
+        run: python3 .github/e2e/verify-vm-network.py
 
       - name: Verify workload Ziti DNS
         run: |-
@@ -1051,31 +837,30 @@ jobs:
             kubectl get pod ziti-dns-preflight -n agyn-workloads -o wide || true
             kubectl describe pod ziti-dns-preflight -n agyn-workloads || true
             kubectl logs pod/ziti-dns-preflight -n agyn-workloads --all-containers=true --tail=-1 || true
-            kubectl get configmap ziti-workload-dns -n ziti -o yaml || true
-            kubectl get service,endpoints,pods -n ziti -l app.kubernetes.io/name=ziti-workload-dns -o wide || true
-            kubectl get service,endpoints -n ziti ziti-workload-dns ziti-controller-client ziti-router-edge -o wide || true
+            kubectl get configmap coredns-custom -n kube-system -o yaml || true
+            kubectl get service,endpoints,pods -n kube-system -l k8s-app=kube-dns -o wide || true
+            kubectl get service,endpoints -n ziti ziti-controller-client ziti-router-edge -o wide || true
             kubectl get service,endpoints -n istio-gateway istio-ingressgateway -o wide || true
             kubectl get networkpolicy agent-workload-egress -n agyn-workloads -o yaml || true
-            kubectl get networkpolicy ziti-workload-dns -n ziti -o yaml || true
             kubectl get pods -n agyn-workloads -o wide || true
             kubectl logs -n agyn-workloads -l app.kubernetes.io/name=ziti-sidecar --all-containers --tail=200 || true
             kubectl logs -n agyn-workloads -l agyn.dev/component=ziti-sidecar --all-containers --tail=200 || true
           }
-          ziti_dns_ip="$(kubectl get service ziti-workload-dns -n ziti -o jsonpath='{.spec.clusterIP}')"
+          ziti_dns_ip="${WORKLOAD_TEST_DNS_SERVICE_IP:?native DNS inventory missing}"
           if [ -z "${ziti_dns_ip}" ]; then
-            echo "ziti-workload-dns ClusterIP is empty" >&2
+            echo "native workload DNS ClusterIP is empty" >&2
             dump_ziti_dns_preflight_diagnostics
             exit 1
           fi
-          ziti_dns_endpoint_ip="$(kubectl get endpoints ziti-workload-dns -n ziti -o jsonpath='{.subsets[0].addresses[0].ip}')"
+          ziti_dns_endpoint_ip="${WORKLOAD_TEST_DNS_ENDPOINT_IP:?native DNS endpoint inventory missing}"
           if [ -z "${ziti_dns_endpoint_ip}" ]; then
-            echo "ziti-workload-dns endpoint IP is empty" >&2
+            echo "native workload DNS endpoint IP is empty" >&2
             dump_ziti_dns_preflight_diagnostics
             exit 1
           fi
-          echo "ziti-workload-dns service ClusterIP: ${ziti_dns_ip}"
-          echo "ziti-workload-dns first endpoint IP: ${ziti_dns_endpoint_ip}"
-          kubectl get service,endpoints,pods -n ziti -l app.kubernetes.io/name=ziti-workload-dns -o wide
+          echo "native workload DNS service ClusterIP: ${ziti_dns_ip}"
+          echo "native workload DNS first endpoint IP: ${ziti_dns_endpoint_ip}"
+          kubectl get service,endpoints,pods -n kube-system -l k8s-app=kube-dns -o wide
           kubectl get networkpolicy agent-workload-egress -n agyn-workloads -o yaml
           kubectl delete pod ziti-dns-preflight -n agyn-workloads --ignore-not-found
           cat <<EOF_POD | kubectl apply -f -
@@ -1124,7 +909,7 @@ jobs:
                     timeout 10 nc -vz -w 5 ziti-router.agyn.dev 2496
           EOF_POD
           if ! kubectl wait pod/ziti-dns-preflight -n agyn-workloads --for=jsonpath='{.status.phase}'=Succeeded --timeout=120s; then
-            echo "ziti-workload-dns UDP/TCP 53 preflight failed from agyn-workloads" >&2
+            echo "native workload DNS UDP/TCP 53 preflight failed from agyn-workloads" >&2
             kubectl get pod ziti-dns-preflight -n agyn-workloads -o yaml >&2 || true
             kubectl logs pod/ziti-dns-preflight -n agyn-workloads >&2 || true
             dump_ziti_dns_preflight_diagnostics >&2
@@ -1136,9 +921,9 @@ jobs:
       - name: Verify workload Ziti runtime TCP
         run: |-
           set -euo pipefail
-          ziti_dns_ip="$(kubectl get service ziti-workload-dns -n ziti -o jsonpath='{.spec.clusterIP}')"
+          ziti_dns_ip="${WORKLOAD_TEST_DNS_SERVICE_IP:?native DNS inventory missing}"
           if [ -z "${ziti_dns_ip}" ]; then
-            echo "ziti-workload-dns ClusterIP is empty" >&2
+            echo "native workload DNS ClusterIP is empty" >&2
             exit 1
           fi
           kubectl delete pod ziti-runtime-preflight -n agyn-workloads --ignore-not-found
@@ -1168,7 +953,7 @@ jobs:
             echo "ziti runtime TCP preflight failed with selector-aware controller policy present" >&2
             kubectl get networkpolicy agent-workload-egress -n agyn-workloads -o yaml >&2 || true
             kubectl get service,endpoints -n ziti ziti-controller-client -o wide >&2 || true
-            kubectl get service,endpoints,pods -n ziti -l app.kubernetes.io/name=ziti-workload-dns -o wide >&2 || true
+            kubectl get service,endpoints,pods -n kube-system -l k8s-app=kube-dns -o wide >&2 || true
             kubectl get pod ziti-runtime-preflight -n agyn-workloads -o yaml >&2 || true
             kubectl logs pod/ziti-runtime-preflight -n agyn-workloads >&2 || true
             exit 1
@@ -1179,9 +964,9 @@ jobs:
       - name: Verify stock sidecar runtime DNS path
         run: |-
           set -euo pipefail
-          ziti_dns_ip="$(kubectl get service ziti-workload-dns -n ziti -o jsonpath='{.spec.clusterIP}')"
+          ziti_dns_ip="${WORKLOAD_TEST_DNS_SERVICE_IP:?native DNS inventory missing}"
           if [ -z "${ziti_dns_ip}" ]; then
-            echo "ziti-workload-dns ClusterIP is empty" >&2
+            echo "native workload DNS ClusterIP is empty" >&2
             exit 1
           fi
           kubectl delete pod ziti-sidecar-dns-preflight -n agyn-workloads --ignore-not-found
@@ -1226,7 +1011,7 @@ jobs:
           if ! kubectl wait pod/ziti-sidecar-dns-preflight -n agyn-workloads --for=jsonpath='{.status.phase}'=Succeeded --timeout=120s; then
             echo "stock ziti sidecar runtime DNS path failed from workload pod context" >&2
             kubectl get networkpolicy agent-workload-egress -n agyn-workloads -o yaml >&2 || true
-            kubectl get service,endpoints,pods -n ziti -l app.kubernetes.io/name=ziti-workload-dns -o wide >&2 || true
+            kubectl get service,endpoints,pods -n kube-system -l k8s-app=kube-dns -o wide >&2 || true
             kubectl get pod ziti-sidecar-dns-preflight -n agyn-workloads -o yaml >&2 || true
             kubectl logs pod/ziti-sidecar-dns-preflight -n agyn-workloads >&2 || true
             exit 1
@@ -1656,28 +1441,6 @@ jobs:
           ref: 435b549a937129b6858e7314648eb690894209fe
           path: e2e
 
-      - name: Patch E2E default model endpoint
-        run: |-
-          set -euo pipefail
-          node <<'NODE'
-          const fs = require('fs');
-          const path = 'e2e/.github/actions/run-tests/action.yml';
-          let text = fs.readFileSync(path, 'utf8');
-          const endpointOriginal = '"endpoint":"https://llm.e2e.agyn.dev/${now}"';
-          const endpointReplacement = '"endpoint":"https://testllm.dev/v1/org/agynio/suite/codex/responses"';
-          const modelOriginal = '"remoteName":"gpt-4o-mini"';
-          const modelReplacement = '"remoteName":"simple-hello"';
-          if (!text.includes(endpointOriginal)) {
-            throw new Error('default E2E LLM provider endpoint block not found');
-          }
-          if (!text.includes(modelOriginal)) {
-            throw new Error('default E2E model remoteName block not found');
-          }
-          text = text.replace(endpointOriginal, endpointReplacement);
-          text = text.replace(modelOriginal, modelReplacement);
-          fs.writeFileSync(path, text);
-          NODE
-
       - name: Checkout OpenTelemetry proto
         uses: actions/checkout@v4
         with:
@@ -1690,6 +1453,7 @@ jobs:
         run: |-
           set -euo pipefail
           node ../.github/scripts/patch-e2e-agent-instances.js
+          python3 ../.e2e-deps/k8s-runner/.github/e2e/patch-native-client.py .
           cd suites/go-core
 
           protoc_bin="${RUNNER_TEMP}/go-core-protoc-gen"
@@ -1735,6 +1499,7 @@ jobs:
             --path "${proto_input}/agynio/api/gateway/v1/llm.proto" \
             --path "${proto_input}/agynio/api/gateway/v1/users.proto" \
             --path "${proto_input}/agynio/api/identity/v1" \
+            --path "${proto_input}/agynio/api/images/v1" \
             --path "${proto_input}/agynio/api/llm/v1" \
             --path "${proto_input}/agynio/api/metering/v1" \
             --path "${proto_input}/agynio/api/organizations/v1" \

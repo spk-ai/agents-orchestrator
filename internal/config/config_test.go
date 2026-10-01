@@ -136,15 +136,13 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		// carries its own platform version rather than a ref to build from.
 		"./.e2e-tooling/.github/actions/provision-vm",
 		"ref: 435b549a937129b6858e7314648eb690894209fe",
-		"K8S_RUNNER_REF: f3458d4d028e16d1abf60905a35c695294e11369",
+		"K8S_RUNNER_REF: 182d127011049d29b055e7ecae9f994a2d6b9f31",
 		"github.event_name == 'workflow_dispatch' && inputs.k8s_runner_ref || env.K8S_RUNNER_REF",
-		"name: Patch workload Ziti DNS runtime target",
-		"current_router_target=",
-		"kubectl get configmap ziti-workload-dns",
-		"ziti.agyn.dev workload DNS from ",
-		"to ziti-controller-client",
-		"ziti-router.agyn.dev from ",
-		"to ziti-router-edge",
+		"name: Verify disposable VM native network inventory",
+		"python3 .github/e2e/verify-vm-network.py",
+		"WORKLOAD_TEST_DNS_SERVICE_IP",
+		"WORKLOAD_TEST_DNS_ENDPOINT_IP",
+		"python3 ../.e2e-deps/k8s-runner/.github/e2e/patch-native-client.py .",
 		"dnsPolicy: None",
 		"timeout 10 nc -vz -w 5 ziti-router.agyn.dev 2496",
 		"name: Verify stock sidecar runtime DNS path",
@@ -169,6 +167,8 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		"kubectl patch application gateway",
 		"kubectl set env",
 		"kubectl patch application llm-proxy",
+		"kubectl patch networkpolicy",
+		"apply_workload_service_alias",
 	} {
 		if strings.Contains(e2eWorkflow, forbidden) {
 			t.Fatalf("expected E2E workflow not to contain %q", forbidden)
