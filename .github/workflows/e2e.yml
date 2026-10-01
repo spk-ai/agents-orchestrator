@@ -629,7 +629,7 @@ jobs:
           assert s.count(old) == 1, 'pinned threads namespace contract changed'
           s = s.replace(old, '  THREADS_NAMESPACE: agyn-platform')
           old = 'buf generate buf.build/agynio/api'
-          assert s.count(old) == 1, 'pinned threads API generation contract changed'
+          assert s.count(old) == 2, 'pinned threads startup and test-pipeline API generation contracts changed'
           p.write_text(s.replace(old, 'buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto'))
           PYCODE
           buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto --path agynio/api/threads/v1 --path agynio/api/notifications/v1 --path agynio/api/identity/v1 --path agynio/api/metering/v1 --path agynio/api/authorization/v1 --path agynio/api/agents/v1
