@@ -1788,61 +1788,10 @@ jobs:
             kubectl logs -n agyn-workloads "${pod}" --all-containers --previous --tail=500 --prefix=true || true
           done
 
-      - name: Restore authorization ArgoCD sync
+      # Provisioning uses a disposable Helm-owned VM, with no ArgoCD apps.
+      - name: Stop disposable platform VM
         if: always()
-        run: |-
-          if kubectl get application authorization -n argocd >/dev/null 2>&1; then
-            kubectl patch application authorization -n argocd \
-              --type merge \
-              -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
+        run: |
+          if command -v agyn >/dev/null 2>&1; then
+            agyn local stop
           fi
-
-      - name: Restore agents ArgoCD sync
-        if: ${{ always() && hashFiles('.e2e-deps/agents/devspace.yaml') != '' }}
-        run: |-
-          if kubectl get application agents -n argocd >/dev/null 2>&1; then
-            kubectl patch application agents -n argocd \
-              --type merge \
-              -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
-          fi
-
-      - name: Restore threads ArgoCD sync
-        if: ${{ always() && hashFiles('.e2e-deps/threads/devspace.yaml') != '' }}
-        run: |-
-          if kubectl get application threads -n argocd >/dev/null 2>&1; then
-            kubectl patch application threads -n argocd \
-              --type merge \
-              -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
-          fi
-
-      - name: Restore identity ArgoCD sync
-        if: ${{ always() && hashFiles('.e2e-deps/identity/devspace.yaml') != '' }}
-        run: |-
-          if kubectl get application identity -n argocd >/dev/null 2>&1; then
-            kubectl patch application identity -n argocd \
-              --type merge \
-              -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
-          fi
-
-      - name: Restore expose ArgoCD sync
-        if: ${{ always() && hashFiles('.e2e-deps/expose/Dockerfile') != '' }}
-        run: |-
-          if kubectl get application expose -n argocd >/dev/null 2>&1; then
-            kubectl patch application expose -n argocd \
-              --type merge \
-              -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
-          fi
-
-      - name: Restore runners ArgoCD sync
-        if: ${{ always() && hashFiles('.e2e-deps/runners/devspace.yaml') != '' }}
-        working-directory: .e2e-deps/runners
-        run: devspace run-pipeline restore-argocd
-
-      - name: Restore k8s-runner ArgoCD sync
-        if: ${{ always() && hashFiles('.e2e-deps/k8s-runner/devspace.yaml') != '' }}
-        working-directory: .e2e-deps/k8s-runner
-        run: devspace run restore-argocd
-
-      - name: Restore ArgoCD sync
-        if: always()
-        run: devspace run restore-argocd
