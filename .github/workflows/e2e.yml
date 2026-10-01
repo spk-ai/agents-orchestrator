@@ -250,13 +250,13 @@ jobs:
           set -euo pipefail
           dump_authorization_model_diagnostics() {
             echo "== authorization model diagnostics ==" >&2
-            kubectl get secret authorization-openfga -n platform -o yaml >&2 || true
+            kubectl get secret authorization-openfga -n agyn-platform -o yaml >&2 || true
             kubectl get application authorization -n argocd -o yaml >&2 || true
-            kubectl get deployment authorization -n platform -o yaml >&2 || true
+            kubectl get deployment authorization -n agyn-platform -o yaml >&2 || true
             kubectl get svc -A -o wide | grep -i openfga >&2 || true
-            kubectl get pods -n platform -l app.kubernetes.io/name=authorization -o wide >&2 || true
-            kubectl logs -n platform -l app.kubernetes.io/name=authorization --all-containers --tail=300 >&2 || true
-            kubectl get events -n platform --sort-by=.metadata.creationTimestamp >&2 || true
+            kubectl get pods -n agyn-platform -l app.kubernetes.io/name=authorization -o wide >&2 || true
+            kubectl logs -n agyn-platform -l app.kubernetes.io/name=authorization --all-containers --tail=300 >&2 || true
+            kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_authorization_model_diagnostics ERR
           secret_name="authorization-openfga"
@@ -373,22 +373,22 @@ jobs:
             echo "authorization model id missing" >&2
             exit 1
           fi
-          kubectl create secret generic "${secret_name}" -n platform \
+          kubectl create secret generic "${secret_name}" -n agyn-platform \
             --from-literal=OPENFGA_STORE_ID="${store_id}" \
             --from-literal=OPENFGA_MODEL_ID="${model_id}" \
             --dry-run=client -o yaml | kubectl apply -f -
-          authorization_deployment="$(kubectl get deployment -n platform -l app.kubernetes.io/name=authorization -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+          authorization_deployment="$(kubectl get deployment -n agyn-platform -l app.kubernetes.io/name=authorization -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
           if [ -z "${authorization_deployment}" ]; then
             echo "authorization deployment not found" >&2
-            kubectl get deployment -n platform -o wide >&2 || true
+            kubectl get deployment -n agyn-platform -o wide >&2 || true
             exit 1
           fi
-          kubectl patch deployment "${authorization_deployment}" -n platform --type=json -p "$(cat <<PATCH
+          kubectl patch deployment "${authorization_deployment}" -n agyn-platform --type=json -p "$(cat <<PATCH
           [{"op":"replace","path":"/spec/template/spec/containers/0/env","value":[{"name":"GRPC_ADDRESS","value":":50051"},{"name":"OPENFGA_API_URL","value":"http://${openfga_service}.${openfga_namespace}.svc.cluster.local:${openfga_port}"},{"name":"OPENFGA_STORE_ID","value":"${store_id}"},{"name":"OPENFGA_MODEL_ID","value":"${model_id}"}]}]
           PATCH
           )"
-          kubectl rollout status "deployment/${authorization_deployment}" -n platform --timeout=240s
-          current_model_id="$(kubectl get deployment "${authorization_deployment}" -n platform -o jsonpath='{range .spec.template.spec.containers[0].env[?(@.name=="OPENFGA_MODEL_ID")]}{.value}{end}')"
+          kubectl rollout status "deployment/${authorization_deployment}" -n agyn-platform --timeout=240s
+          current_model_id="$(kubectl get deployment "${authorization_deployment}" -n agyn-platform -o jsonpath='{range .spec.template.spec.containers[0].env[?(@.name=="OPENFGA_MODEL_ID")]}{.value}{end}')"
           if [ "${current_model_id}" != "${model_id}" ]; then
             echo "authorization deployment OPENFGA_MODEL_ID mismatch: expected ${model_id}, got ${current_model_id}" >&2
             exit 1
@@ -423,16 +423,16 @@ jobs:
             selector="app.kubernetes.io/name=identity"
             echo "== identity source deployment diagnostics ==" >&2
             kubectl get application identity -n argocd -o yaml >&2 || true
-            kubectl get deployment identity -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
+            kubectl get deployment identity -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
             echo "== identity current logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=500 >&2 || true
             echo "== identity previous logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
             echo "== platform events ==" >&2
-            kubectl get events -n platform --sort-by=.metadata.creationTimestamp >&2 || true
+            kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_identity_source_diagnostics ERR
           mkdir -p dist
@@ -448,10 +448,10 @@ jobs:
           extra_pods=""
           elapsed=0
           while [ "${elapsed}" -lt 180 ]; do
-            source_pod="$(kubectl get pods -n platform -l "${selector}" \
+            source_pod="$(kubectl get pods -n agyn-platform -l "${selector}" \
               -o jsonpath='{range .items[?(@.spec.containers[0].image=="ghcr.io/agynio/devcontainer-go:1")]}{.metadata.name}{"\n"}{end}' \
               | head -n 1)"
-            extra_pods="$(kubectl get pods -n platform -l "${selector}" \
+            extra_pods="$(kubectl get pods -n agyn-platform -l "${selector}" \
               -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\n"}{end}' \
               | awk '$2 != "ghcr.io/agynio/devcontainer-go:1" { print }')"
             if [ -n "${source_pod}" ] && [ -z "${extra_pods}" ]; then
@@ -469,14 +469,14 @@ jobs:
               printf '%s\n' "${extra_pods}" >&2
             fi
             kubectl get application identity -n argocd -o yaml >&2 || true
-            kubectl get deployment identity -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=300 >&2 || true
+            kubectl get deployment identity -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=300 >&2 || true
             exit 1
           fi
-          kubectl logs "pod/${source_pod}" -n platform --all-containers --tail=200
+          kubectl logs "pod/${source_pod}" -n agyn-platform --all-containers --tail=200
 
       - name: Register cluster-admin identities
         working-directory: .e2e-deps/identity
@@ -493,7 +493,7 @@ jobs:
               identity_ids="$(printf '%s\n%s' "${identity_ids}" "${gateway_identity_id}")"
             fi
           fi
-          kubectl port-forward -n platform svc/identity 15051:50051 >/tmp/identity-port-forward.log 2>&1 &
+          kubectl port-forward -n agyn-platform svc/identity 15051:50051 >/tmp/identity-port-forward.log 2>&1 &
           port_forward_pid="$!"
           cleanup() {
             kill "${port_forward_pid}" >/dev/null 2>&1 || true
@@ -583,16 +583,16 @@ jobs:
             selector="app.kubernetes.io/name=threads"
             echo "== threads source deployment diagnostics ==" >&2
             kubectl get application threads -n argocd -o yaml >&2 || true
-            kubectl get deployment threads-threads -n platform -o yaml >&2 || kubectl get deployment threads -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
+            kubectl get deployment threads-threads -n agyn-platform -o yaml >&2 || kubectl get deployment threads -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
             echo "== threads current logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=500 >&2 || true
             echo "== threads previous logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
             echo "== platform events ==" >&2
-            kubectl get events -n platform --sort-by=.metadata.creationTimestamp >&2 || true
+            kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_threads_source_diagnostics ERR
           buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto --path agynio/api/threads/v1 --path agynio/api/notifications/v1 --path agynio/api/identity/v1 --path agynio/api/metering/v1 --path agynio/api/authorization/v1 --path agynio/api/agents/v1
@@ -607,10 +607,10 @@ jobs:
           extra_pods=""
           elapsed=0
           while [ "${elapsed}" -lt 180 ]; do
-            source_pod="$(kubectl get pods -n platform -l "${selector}" \
+            source_pod="$(kubectl get pods -n agyn-platform -l "${selector}" \
               -o jsonpath='{range .items[?(@.spec.containers[0].image=="ghcr.io/agynio/devcontainer-go:1")]}{.metadata.name}{"\n"}{end}' \
               | head -n 1)"
-            extra_pods="$(kubectl get pods -n platform -l "${selector}" \
+            extra_pods="$(kubectl get pods -n agyn-platform -l "${selector}" \
               -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\n"}{end}' \
               | awk '$2 != "ghcr.io/agynio/devcontainer-go:1" { print }')"
             if [ -n "${source_pod}" ] && [ -z "${extra_pods}" ]; then
@@ -628,14 +628,14 @@ jobs:
               printf '%s\n' "${extra_pods}" >&2
             fi
             kubectl get application threads -n argocd -o yaml >&2 || true
-            kubectl get deployment threads-threads -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=300 >&2 || true
+            kubectl get deployment threads-threads -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=300 >&2 || true
             exit 1
           fi
-          kubectl logs "pod/${source_pod}" -n platform --all-containers --tail=200
+          kubectl logs "pod/${source_pod}" -n agyn-platform --all-containers --tail=200
 
       - name: Checkout runners
         uses: actions/checkout@v4
@@ -681,10 +681,10 @@ jobs:
           extra_pods=""
           elapsed=0
           while [ "${elapsed}" -lt 180 ]; do
-            source_pod="$(kubectl get pods -n platform -l "${selector}" \
+            source_pod="$(kubectl get pods -n agyn-platform -l "${selector}" \
               -o jsonpath='{range .items[?(@.spec.containers[0].image=="ghcr.io/agynio/devcontainer-go:1")]}{.metadata.name}{"\n"}{end}' \
               | head -n 1)"
-            extra_pods="$(kubectl get pods -n platform -l "${selector}" \
+            extra_pods="$(kubectl get pods -n agyn-platform -l "${selector}" \
               -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\n"}{end}' \
               | awk '$2 != "ghcr.io/agynio/devcontainer-go:1" { print }')"
             if [ -n "${source_pod}" ] && [ -z "${extra_pods}" ]; then
@@ -702,13 +702,13 @@ jobs:
               printf '%s\n' "${extra_pods}" >&2
             fi
             cat /tmp/runners-devspace.log >&2 || true
-            kubectl get deployment runners -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
+            kubectl get deployment runners -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
             exit 1
           fi
-          kubectl logs "pod/${source_pod}" -n platform --all-containers --tail=200
+          kubectl logs "pod/${source_pod}" -n agyn-platform --all-containers --tail=200
 
       - name: Checkout expose
         uses: actions/checkout@v4
@@ -725,16 +725,16 @@ jobs:
             selector="app.kubernetes.io/name=expose"
             echo "== expose source deployment diagnostics ==" >&2
             kubectl get application expose -n argocd -o yaml >&2 || true
-            kubectl get deployment expose -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
+            kubectl get deployment expose -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
             echo "== expose current logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=500 >&2 || true
             echo "== expose previous logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
             echo "== platform events ==" >&2
-            kubectl get events -n platform --sort-by=.metadata.creationTimestamp >&2 || true
+            kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_expose_source_diagnostics ERR
           if kubectl get application expose -n argocd >/dev/null 2>&1; then
@@ -756,10 +756,10 @@ jobs:
           image="e2e/expose:agent-instances"
           docker build -t "${image}" .
           agyn local load-image "${image}"
-          kubectl patch deployment expose -n platform --type merge -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
-          kubectl set image deployment/expose -n platform expose="${image}"
-          kubectl rollout status deployment/expose -n platform --timeout=240s
-          kubectl logs deployment/expose -n platform --all-containers --tail=200
+          kubectl patch deployment expose -n agyn-platform --type merge -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
+          kubectl set image deployment/expose -n agyn-platform expose="${image}"
+          kubectl rollout status deployment/expose -n agyn-platform --timeout=240s
+          kubectl logs deployment/expose -n agyn-platform --all-containers --tail=200
 
       - name: Checkout k8s-runner
         uses: actions/checkout@v4
@@ -776,16 +776,16 @@ jobs:
             selector="app.kubernetes.io/name=k8s-runner"
             echo "== k8s-runner source deployment diagnostics ==" >&2
             kubectl get application k8s-runner -n argocd -o yaml >&2 || true
-            kubectl get deployment k8s-runner -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
+            kubectl get deployment k8s-runner -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
             echo "== k8s-runner current logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=500 >&2 || true
             echo "== k8s-runner previous logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
             echo "== platform events ==" >&2
-            kubectl get events -n platform --sort-by=.metadata.creationTimestamp >&2 || true
+            kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_k8s_runner_source_diagnostics ERR
           devspace run deploy
@@ -849,7 +849,7 @@ jobs:
             echo "istio-ingressgateway endpoints are empty" >&2
             exit 1
           fi
-          agents_service_ip="$(kubectl get service agents -n platform -o jsonpath='{.spec.clusterIP}')"
+          agents_service_ip="$(kubectl get service agents -n agyn-platform -o jsonpath='{.spec.clusterIP}')"
           if [ -z "${agents_service_ip}" ]; then
             echo "agents ClusterIP is empty" >&2
             exit 1
@@ -859,7 +859,7 @@ jobs:
             echo "agents endpoints are empty" >&2
             exit 1
           fi
-          runners_service_ip="$(kubectl get service runners -n platform -o jsonpath='{.spec.clusterIP}')"
+          runners_service_ip="$(kubectl get service runners -n agyn-platform -o jsonpath='{.spec.clusterIP}')"
           if [ -z "${runners_service_ip}" ]; then
             echo "runners ClusterIP is empty" >&2
             exit 1
@@ -1231,16 +1231,16 @@ jobs:
             selector="app.kubernetes.io/name=gateway"
             echo "== gateway source deployment diagnostics ==" >&2
             kubectl get application gateway -n argocd -o yaml >&2 || true
-            kubectl get deployment gateway -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
+            kubectl get deployment gateway -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
             echo "== gateway current logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=500 >&2 || true
             echo "== gateway previous logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
             echo "== platform events ==" >&2
-            kubectl get events -n platform --sort-by=.metadata.creationTimestamp >&2 || true
+            kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_gateway_source_diagnostics ERR
           buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto
@@ -1315,7 +1315,7 @@ jobs:
           source_pod=""
           elapsed=0
           while [ "${elapsed}" -lt 180 ]; do
-            source_pod="$(kubectl get pods -n platform -l "${selector}" \
+            source_pod="$(kubectl get pods -n agyn-platform -l "${selector}" \
               -o jsonpath='{range .items[?(@.spec.containers[0].image=="ghcr.io/agynio/devcontainer-go:1.1.0")]}{.metadata.name}{"\n"}{end}' \
               | head -n 1)"
             if [ -n "${source_pod}" ]; then
@@ -1327,33 +1327,33 @@ jobs:
           if [ -z "${source_pod}" ]; then
             echo "gateway source pod not found" >&2
             kubectl get application gateway -n argocd -o yaml >&2 || true
-            kubectl get deployment gateway -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=500 >&2 || true
+            kubectl get deployment gateway -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=500 >&2 || true
             exit 1
           fi
-          ziti_enabled="$(kubectl get deployment gateway -n platform -o jsonpath='{range .spec.template.spec.containers[*].env[?(@.name=="ZITI_ENABLED")]}{.value}{end}')"
+          ziti_enabled="$(kubectl get deployment gateway -n agyn-platform -o jsonpath='{range .spec.template.spec.containers[*].env[?(@.name=="ZITI_ENABLED")]}{.value}{end}')"
           if [ "${ziti_enabled}" != "true" ]; then
             echo "gateway source deployment is not configured with ZITI_ENABLED=true" >&2
-            kubectl get deployment gateway -n platform -o yaml >&2 || true
+            kubectl get deployment gateway -n agyn-platform -o yaml >&2 || true
             exit 1
           fi
           attempts=0
           while [ "${attempts}" -lt 120 ]; do
-            if kubectl logs "pod/${source_pod}" -n platform --all-containers --tail=500 2>/dev/null | grep -q 'gateway listening on ziti service gateway'; then
-              kubectl logs "pod/${source_pod}" -n platform --all-containers --tail=200
+            if kubectl logs "pod/${source_pod}" -n agyn-platform --all-containers --tail=500 2>/dev/null | grep -q 'gateway listening on ziti service gateway'; then
+              kubectl logs "pod/${source_pod}" -n agyn-platform --all-containers --tail=200
               exit 0
             fi
             attempts=$((attempts + 1))
             sleep 1
           done
           echo "gateway source pod did not report Ziti service listener" >&2
-          kubectl get deployment gateway -n platform -o yaml >&2 || true
-          kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-          kubectl describe pods -n platform -l "${selector}" >&2 || true
-          kubectl logs "pod/${source_pod}" -n platform --all-containers --tail=500 >&2 || true
+          kubectl get deployment gateway -n agyn-platform -o yaml >&2 || true
+          kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+          kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
+          kubectl logs "pod/${source_pod}" -n agyn-platform --all-containers --tail=500 >&2 || true
           exit 1
 
       - name: Checkout api
@@ -1426,7 +1426,7 @@ jobs:
             }
             text = text.replace(marker, [
               '    echo "' + resolveBlockMarker + '"',
-              '    llm_proxy_namespace="${LLM_PROXY_NAMESPACE:-platform}"',
+              '    llm_proxy_namespace="${LLM_PROXY_NAMESPACE:-agyn-platform}"',
               '    llm_proxy_deployment="$(kubectl get deployment -n "${llm_proxy_namespace}" -l app.kubernetes.io/instance=llm-proxy -o jsonpath=\'{.items[0].metadata.name}\' 2>/dev/null || true)"',
               '    if [ -z "${llm_proxy_deployment}" ]; then',
               '      llm_proxy_deployment="$(kubectl get deployment -n "${llm_proxy_namespace}" -l app.kubernetes.io/name=llm-proxy -o jsonpath=\'{.items[0].metadata.name}\' 2>/dev/null || true)"',
@@ -1593,29 +1593,29 @@ jobs:
             kubectl get application "$app" -n argocd -o yaml >&2 || true
           }
           wait_argocd_app_sync_finished llm-proxy
-          deployment="$(kubectl get deployment -n platform -l app.kubernetes.io/instance=llm-proxy -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+          deployment="$(kubectl get deployment -n agyn-platform -l app.kubernetes.io/instance=llm-proxy -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
           if [ -z "${deployment}" ]; then
-            deployment="$(kubectl get deployment -n platform -l app.kubernetes.io/name=llm-proxy -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+            deployment="$(kubectl get deployment -n agyn-platform -l app.kubernetes.io/name=llm-proxy -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
           fi
           if [ -z "${deployment}" ]; then
             echo "llm-proxy deployment not found" >&2
             kubectl get application llm-proxy -n argocd -o yaml >&2 || true
-            kubectl get deployments -n platform -o wide >&2 || true
+            kubectl get deployments -n agyn-platform -o wide >&2 || true
             exit 1
           fi
-          kubectl rollout status "deployment/${deployment}" -n platform --timeout=240s
-          ziti_enabled_values="$(kubectl get "deployment/${deployment}" -n platform -o jsonpath='{range .spec.template.spec.containers[*].env[?(@.name=="ZITI_ENABLED")]}{.value}{"\n"}{end}')"
+          kubectl rollout status "deployment/${deployment}" -n agyn-platform --timeout=240s
+          ziti_enabled_values="$(kubectl get "deployment/${deployment}" -n agyn-platform -o jsonpath='{range .spec.template.spec.containers[*].env[?(@.name=="ZITI_ENABLED")]}{.value}{"\n"}{end}')"
           ziti_enabled="$(printf '%s\n' "${ziti_enabled_values}" | awk 'NF { value=$0 } END { print value }')"
           if [ "${ziti_enabled}" != "true" ]; then
             echo "llm-proxy deployment is not source-of-truth configured with ZITI_ENABLED=true" >&2
             kubectl get application llm-proxy -n argocd -o yaml >&2 || true
-            kubectl get "deployment/${deployment}" -n platform -o yaml >&2 || true
+            kubectl get "deployment/${deployment}" -n agyn-platform -o yaml >&2 || true
             exit 1
           fi
           attempts=0
           while [ "${attempts}" -lt 120 ]; do
-            if kubectl logs "deployment/${deployment}" -n platform --all-containers --tail=500 2>/dev/null | grep -q 'llm-proxy listening on ziti service llm-proxy'; then
-              kubectl logs "deployment/${deployment}" -n platform --all-containers --tail=200
+            if kubectl logs "deployment/${deployment}" -n agyn-platform --all-containers --tail=500 2>/dev/null | grep -q 'llm-proxy listening on ziti service llm-proxy'; then
+              kubectl logs "deployment/${deployment}" -n agyn-platform --all-containers --tail=200
               exit 0
             fi
             attempts=$((attempts + 1))
@@ -1623,10 +1623,10 @@ jobs:
           done
           echo "llm-proxy did not report Ziti service listener from the source-of-truth deployment" >&2
           kubectl get application llm-proxy -n argocd -o yaml >&2 || true
-          kubectl get "deployment/${deployment}" -n platform -o yaml >&2 || true
-          kubectl get pods -n platform -l app.kubernetes.io/instance=llm-proxy -o wide >&2 || true
-          kubectl get pods -n platform -l app.kubernetes.io/name=llm-proxy -o wide >&2 || true
-          kubectl logs "deployment/${deployment}" -n platform --all-containers --tail=500 >&2 || true
+          kubectl get "deployment/${deployment}" -n agyn-platform -o yaml >&2 || true
+          kubectl get pods -n agyn-platform -l app.kubernetes.io/instance=llm-proxy -o wide >&2 || true
+          kubectl get pods -n agyn-platform -l app.kubernetes.io/name=llm-proxy -o wide >&2 || true
+          kubectl logs "deployment/${deployment}" -n agyn-platform --all-containers --tail=500 >&2 || true
           exit 1
       - name: Deploy orchestrator from source
         run: devspace run deploy
@@ -1764,16 +1764,16 @@ jobs:
           for app in runners agents-orchestrator k8s-runner agents authorization identity threads expose gateway llm-proxy; do
             selector="app.kubernetes.io/name=${app}"
             echo "== ${app} deployment =="
-            kubectl get deployment "${app}" -n platform -o yaml || kubectl get deployment "${app}-${app}" -n platform -o yaml || true
+            kubectl get deployment "${app}" -n agyn-platform -o yaml || kubectl get deployment "${app}-${app}" -n agyn-platform -o yaml || true
             echo "== ${app} pods =="
-            kubectl get pods -n platform -l "${selector}" -o wide || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide || true
             echo "== ${app} describe =="
-            kubectl describe pods -n platform -l "${selector}" || true
+            kubectl describe pods -n agyn-platform -l "${selector}" || true
             echo "== ${app} logs =="
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=300 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=300 || true
           done
           echo "== platform events =="
-          kubectl get events -n platform --sort-by=.metadata.creationTimestamp || true
+          kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp || true
           echo "== workload pods =="
           kubectl get pods -n agyn-workloads -o wide || true
           kubectl describe pods -n agyn-workloads || true
