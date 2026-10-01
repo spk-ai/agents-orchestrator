@@ -204,6 +204,32 @@ func newPreparedControllerFixture(t *testing.T, sandbox bool) *preparedControlle
 	return f
 }
 
+func TestPreparedControllerFlavorAdmissionBinding(t *testing.T) {
+	for _, match := range []bool{false, true} {
+		t.Run(fmt.Sprint(match), func(t *testing.T) {
+			f := newPreparedControllerFixture(t, false)
+			f.metadata.Flavor = "bounded-workload"
+			f.request.Flavor = "different-workload"
+			if match {
+				f.request.Flavor = f.metadata.Flavor
+			}
+			w, err := f.start()
+			if !match {
+				if err == nil || f.w != nil || f.prepares != 0 || f.activations != 0 {
+					t.Fatalf("mismatched flavor reached admission or execution: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if w.Flavor != f.metadata.Flavor || f.lastRequest.Workload.Flavor != w.Flavor {
+				t.Fatal("reserved and executed flavors differ")
+			}
+		})
+	}
+}
+
 func (f *preparedControllerFixture) transition(_ context.Context, req *runnersv1.UpdatePreparedWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.UpdatePreparedWorkloadResponse, error) {
 	if f.w == nil || req.Id != f.w.Meta.Id || req.ExpectedRevision != f.w.Preparation.Revision {
 		return nil, status.Error(codes.Aborted, "revision conflict")

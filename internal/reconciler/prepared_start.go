@@ -25,6 +25,11 @@ func (r *Reconciler) planPreparedStart(ctx context.Context, runner runnerv1.Runn
 	if metadata == nil || request.GetMain() == nil || !preparedUUID(metadata.Id) || request.WorkloadId != metadata.Id {
 		return nil, fmt.Errorf("prepared start requires matching workload metadata")
 	}
+	// Registry admission and native allocation must select the same operator
+	// flavor. A caller label is not a substitute for this resolved binding.
+	if metadata.Flavor != request.Flavor {
+		return nil, fmt.Errorf("prepared start requires matching workload flavor")
+	}
 	records, err := buildVolumeRecords(infos)
 	if err != nil {
 		return nil, err
