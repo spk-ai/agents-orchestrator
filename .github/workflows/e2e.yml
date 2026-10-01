@@ -782,6 +782,8 @@ jobs:
           buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto \
             --include-imports \
             --path agynio/api/expose/v1 \
+            --path agynio/api/agents/v1 \
+            --path agynio/api/organizations/v1 \
             --path agynio/api/ziti_management/v1 \
             --path agynio/api/runners/v1 \
             --path agynio/api/runner/v1 \
@@ -789,7 +791,7 @@ jobs:
             --path agynio/api/identity/v1 \
             --path agynio/api/authorization/v1
           gofmt -w internal/server/server.go internal/server/server_test.go
-          CGO_ENABLED=0 go test ./internal/server -run 'TestAddExposureAllowsAgentInstanceOwner|TestAddExposureHappyPath|TestListExposuresSuccess' -count=1
+          CGO_ENABLED=0 go test ./internal/server -count=1
           python3 - <<'PYCODE'
           from pathlib import Path
           p = Path('Dockerfile')
