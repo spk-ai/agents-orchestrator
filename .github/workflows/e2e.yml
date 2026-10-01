@@ -9,7 +9,7 @@ on:
       k8s_runner_ref:
         description: k8s-runner ref to deploy from.
         required: false
-        default: ac294515ea03694d7c45b82a7d066af74de9dac2
+        default: f3458d4d028e16d1abf60905a35c695294e11369
       agents_ref:
         description: Agents ref to deploy from.
         required: false
@@ -21,7 +21,7 @@ on:
       runners_ref:
         description: Runners ref to deploy from.
         required: false
-        default: 7653b8edf9b218085c78f42ba665520a4aaa5408
+        default: 31df7a2fb51736ff2c0e05968c39636808596db5
       identity_ref:
         description: Identity ref to deploy from.
         required: false
@@ -50,10 +50,10 @@ on:
 # Init images are resolved to the newest published release by the run-tests
 # action. Pinning one here opts this workflow out of every fix shipped after it.
 env:
-  K8S_RUNNER_REF: ac294515ea03694d7c45b82a7d066af74de9dac2
+  K8S_RUNNER_REF: f3458d4d028e16d1abf60905a35c695294e11369
   AGENTS_REF: df88f90f6aee77647912e7336e03d43545a2a6a4
   AUTHORIZATION_REF: 30581ca4f834ad8a0a63e14bd0f465333b3929e9
-  RUNNERS_REF: 7653b8edf9b218085c78f42ba665520a4aaa5408
+  RUNNERS_REF: 31df7a2fb51736ff2c0e05968c39636808596db5
   IDENTITY_REF: 47aaabc67acfad0b80ca97d5e1b27f96b670f27f
   THREADS_REF: 066fe51e57343b130b38af09d061a6540e0e8e20
   AGYND_CLI_REF: 495920a92cc359e0693e8710f11469240bd5a770
