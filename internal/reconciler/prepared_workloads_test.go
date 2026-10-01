@@ -630,15 +630,14 @@ func TestPreparedControllerRemovalRestartWindows(t *testing.T) {
 
 func TestPreparedControllerUnsafeWorkspacePlan(t *testing.T) {
 	for _, sandbox := range []bool{false, true} {
-		for _, scenario := range []string{"unproven-first-create", "reopened-unbound", "legacy", "other-owner", "other-runner", "other-org", "other-definition", "wrong-size", "pending-removal", "untracked-volume", "duplicate-volume", "other-backend", "missing-bound-pvc", "replaced-bound-pvc", "unknown-inventory", "incomplete-inventory"} {
+		for _, scenario := range []string{"unproven-first-create", "reopened-stale-receipt", "legacy", "other-owner", "other-runner", "other-org", "other-definition", "wrong-size", "pending-removal", "untracked-volume", "duplicate-volume", "other-backend", "missing-bound-pvc", "replaced-bound-pvc", "unknown-inventory", "incomplete-inventory"} {
 			t.Run(fmt.Sprintf("sandbox=%t/%s", sandbox, scenario), func(t *testing.T) {
 				f := newPreparedControllerFixture(t, sandbox)
 				switch scenario {
 				case "unproven-first-create":
 					f.created = nil
-				case "reopened-unbound":
+				case "reopened-stale-receipt":
 					f.v.LifecycleRevision = 3
-					f.created[0].checked.LifecycleRevision = 3
 				case "legacy":
 					f.v.CheckedLifecycle = false
 				case "other-owner":

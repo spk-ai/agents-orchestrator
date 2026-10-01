@@ -56,11 +56,12 @@ func validateCheckedVolume(v *runnersv1.Volume) error {
 		return checkedVolumeError(v, "exactly one allocation or adoption receipt required for an anchor")
 	}
 	if a := v.ResourceAnchor; a != nil {
-		if v.Status == runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING && (v.BoundInstance != nil || v.LifecycleRevision != 2) {
+		if v.Status == runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING && (v.BoundInstance != nil || v.LifecycleRevision != originalAllocationRevision(v.AnchorReservation)) {
 			return checkedVolumeError(v, "anchored first provision requires its original unbound generation")
 		}
 		if receipt := v.AnchorReservation; receipt != nil && (!preparedUUID(receipt.WorkloadId) || receipt.PreparationRevision == 0 || receipt.PreparationRevision > math.MaxInt64 ||
-			receipt.ResourceRevision == 0 || receipt.ResourceRevision > math.MaxInt64 || len(receipt.ProtoReflect().GetUnknown()) != 0 ||
+			receipt.ResourceRevision == 0 || receipt.ResourceRevision > math.MaxInt64 ||
+			originalAllocationRevision(receipt) < 2 || originalAllocationRevision(receipt) > math.MaxInt64 || len(receipt.ProtoReflect().GetUnknown()) != 0 ||
 			v.Status == runnersv1.VolumeStatus_VOLUME_STATUS_FAILED) {
 			return checkedVolumeError(v, "invalid persistent anchor reservation")
 		}
@@ -253,7 +254,7 @@ func (r *Reconciler) updateCheckedVolume(ctx context.Context, v *runnersv1.Volum
 		valid = v.ResourceAnchor == nil && v.BoundInstance == nil && next.Status == runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING &&
 			next.BoundInstance == nil && next.RemovalIntent == nil && proto.Equal(next.ResourceAnchor, op.BindAnchor.GetAnchor()) &&
 			proto.Equal(next.AnchorReservation, &runnersv1.VolumeAnchorReservation{WorkloadId: op.BindAnchor.GetWorkloadId(),
-				PreparationRevision: op.BindAnchor.GetExpectedPreparationRevision(), ResourceRevision: op.BindAnchor.GetExpectedAnchorRevision()})
+				PreparationRevision: op.BindAnchor.GetExpectedPreparationRevision(), ResourceRevision: op.BindAnchor.GetExpectedAnchorRevision(), AllocationRevision: allocationReceiptRevision(next.LifecycleRevision)})
 	case *runnersv1.UpdateVolumeCheckedRequest_Bind:
 		valid = next.Status == runnersv1.VolumeStatus_VOLUME_STATUS_ACTIVE && proto.Equal(next.BoundInstance, op.Bind.GetInstance())
 	case *runnersv1.UpdateVolumeCheckedRequest_BeginRemoval:
@@ -401,4 +402,20 @@ func (r *Reconciler) advanceVolumeRemoval(ctx context.Context, runner runnerv1.R
 	default:
 		return false, checkedVolumeError(next, "runner did not report a recognized removal state")
 	}
+}
+
+// Preserve legacy revision-2 receipts without confusing a reopened unallocated
+// record with a later mutation of an already anchored workspace.
+func allocationReceiptRevision(revision uint64) uint64 {
+	if revision == 2 {
+		return 0
+	}
+	return revision
+}
+
+func originalAllocationRevision(receipt *runnersv1.VolumeAnchorReservation) uint64 {
+	if receipt.GetAllocationRevision() == 0 {
+		return 2
+	}
+	return receipt.GetAllocationRevision()
 }

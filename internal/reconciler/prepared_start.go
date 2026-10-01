@@ -89,12 +89,12 @@ func (r *Reconciler) planPreparedStart(ctx context.Context, runner runnerv1.Runn
 			}
 			plan.request.ExpectedVolumes = append(plan.request.ExpectedVolumes, proto.Clone(v.BoundInstance).(*runnerv1.VolumeListItem))
 		} else {
-			// Only this attempt's successful first-create receipt permits an
+			// Only this attempt's successful create/reopen receipt permits an
 			// omitted native binding. An old unbound row is not proof of absence.
 			fresh := false
 			for _, receipt := range created {
-				if receipt.id == record.id && receipt.checked != nil && receipt.checked.LifecycleRevision == 1 &&
-					v.LifecycleRevision == 1 && sameVolumeIdentity(receipt.checked, v) && receipt.checked.BoundInstance == nil {
+				if receipt.id == record.id && receipt.checked != nil && receipt.checked.LifecycleRevision == v.LifecycleRevision &&
+					receipt.checked.ResourceAnchor == nil && sameVolumeIdentity(receipt.checked, v) && receipt.checked.BoundInstance == nil {
 					fresh = true
 				}
 			}
@@ -233,6 +233,12 @@ func (r *Reconciler) startPreparedWorkload(ctx context.Context, runner runnerv1.
 	registryAttempted = true
 	response, err := r.runners.CreateAnchoredWorkload(ctx, &runnersv1.CreateAnchoredWorkloadRequest{Preparation: &runnersv1.CreatePreparedWorkloadRequest{Workload: metadata, BackendId: plan.request.BackendId, VolumeIds: plan.ids}})
 	if err != nil {
+		// Only the registry's exact noncommitting capacity rejection permits
+		// preflight compensation. Transport/resource-limit errors can follow a
+		// committed reservation and must retain the existing recovery fences.
+		if status.Code(err) == codes.ResourceExhausted && status.Convert(err).Message() == "workload_flavor_capacity_exhausted" {
+			registryAttempted = false
+		}
 		return nil, err
 	}
 	w := response.GetWorkload()

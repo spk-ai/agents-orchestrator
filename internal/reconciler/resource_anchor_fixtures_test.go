@@ -127,6 +127,7 @@ func (f *preparedControllerFixture) installAnchoredProtocol() {
 			f.v.ResourceAnchor = proto.Clone(op.Anchor).(*runnerv1.ResourceAnchor)
 			f.v.AnchorReservation = &runnersv1.VolumeAnchorReservation{WorkloadId: op.WorkloadId, PreparationRevision: op.ExpectedPreparationRevision, ResourceRevision: op.ExpectedAnchorRevision}
 			f.v.LifecycleRevision++
+			f.v.AnchorReservation.AllocationRevision = allocationReceiptRevision(f.v.LifecycleRevision)
 			return &runnersv1.UpdateVolumeCheckedResponse{Volume: proto.Clone(f.v).(*runnersv1.Volume)}, nil
 		}
 		return volumeUpdate(ctx, req, opts...)
