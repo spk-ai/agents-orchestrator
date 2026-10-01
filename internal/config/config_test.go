@@ -131,8 +131,9 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 	for _, expected := range []string{
 		// Bootstrap no longer provisions this workflow: the VM does, and it
 		// carries its own platform version rather than a ref to build from.
-		"agynio/e2e/.github/actions/provision-vm@main",
-		"K8S_RUNNER_REF: main",
+		"./.e2e-tooling/.github/actions/provision-vm",
+		"ref: 435b549a937129b6858e7314648eb690894209fe",
+		"K8S_RUNNER_REF: ac294515ea03694d7c45b82a7d066af74de9dac2",
 		"github.event_name == 'workflow_dispatch' && inputs.k8s_runner_ref || env.K8S_RUNNER_REF",
 		"name: Patch workload Ziti DNS runtime target",
 		"current_router_target=",
