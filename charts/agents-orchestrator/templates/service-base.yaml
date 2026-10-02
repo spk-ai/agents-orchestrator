@@ -1,3 +1,4 @@
+{{- include "agents-orchestrator.configureRunnersToken" . -}}
 {{ include "service-base.rbac" . }}
 ---
 {{ include "service-base.serviceAccount" . }}

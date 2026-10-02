@@ -56,6 +56,15 @@ functions:
               emptyDir: {}
             - name: go-mod-cache
               emptyDir: {}
+            # The chart's runnersCallerToken volume: Runners calls carry this
+            # projected token, so the source build exercises the same path.
+            - name: runners-caller-token
+              projected:
+                sources:
+                  - serviceAccountToken:
+                      audience: agyn-runners
+                      expirationSeconds: 600
+                      path: token
           containers:
             - name: agents-orchestrator
               image: ghcr.io/agynio/devcontainer-go:1 # keep in sync with DEV_IMAGE
@@ -91,6 +100,8 @@ functions:
                   value: /tmp/go-build-cache
                 - name: GOMODCACHE
                   value: /tmp/go-mod-cache
+                - name: RUNNERS_TOKEN_FILE
+                  value: /var/run/secrets/agyn.io/runners-token/token
               command:
                 - sh
                 - -c
@@ -121,6 +132,9 @@ functions:
                   mountPath: /tmp/go-build-cache
                 - name: go-mod-cache
                   mountPath: /tmp/go-mod-cache
+                - name: runners-caller-token
+                  mountPath: /var/run/secrets/agyn.io/runners-token
+                  readOnly: true
               resources:
                 # Requests are reservations held for the pod's whole life, but a
                 # dev container only needs its build peak briefly and then idles

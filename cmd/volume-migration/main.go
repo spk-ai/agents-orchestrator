@@ -19,6 +19,7 @@ import (
 	runnersv1 "github.com/agynio/agents-orchestrator/.gen/go/agynio/api/runners/v1"
 	zitimgmtv1 "github.com/agynio/agents-orchestrator/.gen/go/agynio/api/ziti_management/v1"
 	"github.com/agynio/agents-orchestrator/internal/runnerdial"
+	"github.com/agynio/agents-orchestrator/internal/runnerscreds"
 	"github.com/agynio/agents-orchestrator/internal/volumemigration"
 	"github.com/agynio/agents-orchestrator/internal/zitimanager"
 	"github.com/google/uuid"
@@ -43,6 +44,7 @@ func run() error {
 	inspectRunner := flag.String("inspect-runner", "", "read native volume inventory for this runner without migrating")
 	continueQuarantined := flag.Bool("continue-quarantined", false, "retain failed owners blocked while processing the remaining batch")
 	registryAddress := flag.String("runners-address", "", "private platform registry gRPC address")
+	registryTokenFile := flag.String("runners-token-file", os.Getenv("RUNNERS_TOKEN_FILE"), "projected caller token for the registry (defaults to RUNNERS_TOKEN_FILE; empty sends none)")
 	managementAddress := flag.String("ziti-management-address", "", "private platform Ziti management gRPC address")
 	ack := flag.Bool("trusted-local-drained", false, "acknowledge trusted local writers are drained and backups restore-verified")
 	timeout := flag.Duration("timeout", 5*time.Minute, "maximum duration; interruption retains the migration block")
@@ -78,7 +80,11 @@ func run() error {
 	defer stop()
 	ctx, cancel := context.WithTimeout(parent, *timeout)
 	defer cancel()
-	registry, err := grpc.NewClient(*registryAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	registryOptions, err := runnerscreds.DialOptions(*registryTokenFile)
+	if err != nil {
+		return fmt.Errorf("runners caller token: %w", err)
+	}
+	registry, err := grpc.NewClient(*registryAddress, registryOptions...)
 	if err != nil {
 		return err
 	}
