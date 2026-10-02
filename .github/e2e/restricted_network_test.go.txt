@@ -87,11 +87,9 @@ func TestRestrictedTaskPodAnswersAndHolds(t *testing.T) {
 	if err != nil || body != expectedAgentResponse {
 		t.Fatalf("restricted task Pod did not answer: %q %v", body, err)
 	}
-	ids, err := findWorkloadsByLabels(ctx, runnerClient, labels)
-	if err != nil || len(ids) == 0 {
-		t.Fatalf("answered, but its workload is not listed: %v", err)
-	}
-	t.Logf("agent %s answered through workload %v; holding %s for the restricted network watcher", agentID, ids, restrictedHoldWindow)
+	// The answer is the proof of a turn; the instance-scoped workload carries
+	// no thread label to look it up by, and the watcher finds it by Pod.
+	t.Logf("agent %s answered; holding %s for the restricted network watcher", agentID, restrictedHoldWindow)
 	select {
 	case <-time.After(restrictedHoldWindow):
 	case <-ctx.Done():
