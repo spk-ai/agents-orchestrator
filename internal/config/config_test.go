@@ -149,7 +149,14 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		"image: openziti/ziti-tunnel:2.0.0-pre10",
 		"bash -c '</dev/tcp/ziti.agyn.dev/2496'",
 		"name: Verify gateway Ziti service binding",
-		"gateway listening on ziti service gateway",
+		// The Gateway's /readyz, not its log text, proves a router-confirmed
+		// terminator; a synthetic agent then dials it over the native overlay.
+		"repository: spk-ai/gateway",
+		"GATEWAY_REF: 45171b64043510f2df643ba7b9938800733a98e7",
+		"http://127.0.0.1:18090/readyz",
+		"cp ../.github/e2e/gateway_ziti_probe_test.go.txt suites/go-core/tests/gateway_ziti_probe_test.go",
+		`E2E_GO_TEST_RUN: "^TestGatewayZitiNativeTransport$"`,
+		"bash .github/e2e/collect-ziti-diagnostics.sh",
 		"name: Verify llm-proxy Ziti service binding",
 		"llm-proxy listening on ziti service llm-proxy",
 	} {
@@ -169,6 +176,7 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		"kubectl patch application llm-proxy",
 		"kubectl patch networkpolicy",
 		"apply_workload_service_alias",
+		"grep -q 'gateway listening on ziti service gateway'",
 	} {
 		if strings.Contains(e2eWorkflow, forbidden) {
 			t.Fatalf("expected E2E workflow not to contain %q", forbidden)
