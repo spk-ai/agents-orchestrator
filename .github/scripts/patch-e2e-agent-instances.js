@@ -22,6 +22,24 @@ function replace(path, marker, original, replacement) {
 const mainPath = 'suites/go-core/tests/main_test.go';
 const idlePath = 'suites/go-core/tests/idle_test.go';
 
+// The pinned suite already matches native instance senders and provisions its
+// fixture LLM endpoint. Preserve those checks instead of applying older patches.
+for (const [path, expected] of [
+  [mainPath, 'if !senders.contains(msg.GetSenderId()) {'],
+  ['suites/go-core/tests/threads_send_test.go', 'if !senders.contains(msg.GetSenderId()) {'],
+  ['suites/go-core/tests/agent_agyn_wait_test.go', 'senders.contains(msg.GetSenderId()) && msg.GetBody() == body'],
+  // The testllm fixture shell-agyn-thread-create-wait replays a recorded
+  // `agyn threads create --add @e2e-agyn-wait-b-fixed --ref e2e-agyn-wait-fixed`
+  // call and compares its output, so these names must stay exactly as pinned.
+  ['suites/go-core/tests/agent_agyn_wait_test.go', 'agentBNickname := "e2e-agyn-wait-b-fixed"'],
+  ['suites/go-core/tests/agent_agyn_wait_test.go', 'uniqueRef := "e2e-agyn-wait-fixed"'],
+  ['suites/go-core/tests/agent_agyn_wait_test.go', 'sentinel := "e2e-agyn-wait-sentinel-fixed"'],
+  ['suites/go-core/suite.yaml', 'if [ ! -d .gen/go/agynio/api ]; then'],
+]) {
+  if (!read(path).includes(expected)) throw new Error(`${path}: pinned native fixture contract changed`);
+}
+
+
 replace(
   mainPath,
   'agent instance label constant',
@@ -41,13 +59,13 @@ replace(
   'thread agent participant registry',
   [
     'var (',
-    '\tagentsAddr      = envOrDefault("AGENTS_ADDRESS", "agents:50051")',
+    '\tthreadsAddr  = envOrDefault("THREADS_ADDRESS", "threads:50051")',
   ].join('\n'),
   [
     'var threadAgentParticipants sync.Map',
     '',
     'var (',
-    '\tagentsAddr      = envOrDefault("AGENTS_ADDRESS", "agents:50051")',
+    '\tthreadsAddr  = envOrDefault("THREADS_ADDRESS", "threads:50051")',
   ].join('\n'),
 );
 
@@ -143,22 +161,7 @@ replace(
   ].join('\n'),
 );
 
-replace(
-  mainPath,
-  'response sender matcher',
-  [
-    '\tmessageMatches := func(msg *threadsv1.Message) bool {',
-    '\t\tif msg.GetSenderId() != agentID {',
-    '\t\t\treturn false',
-    '\t\t}',
-  ].join('\n'),
-  [
-    '\tmessageMatches := func(msg *threadsv1.Message) bool {',
-    '\t\tif !agentResponseSenderMatches(msg, agentID, labels) {',
-    '\t\t\treturn false',
-    '\t\t}',
-  ].join('\n'),
-);
+
 
 const goCoreFiles = fs.readdirSync('suites/go-core/tests')
   .filter((name) => name.endsWith('.go'))
@@ -177,12 +180,7 @@ for (const path of goCoreFiles) {
   write(path, text);
 }
 
-replace(
-  'suites/go-core/tests/threads_send_test.go',
-  'multi-message sender matcher',
-  'if msg.GetSenderId() != agentID {',
-  'if !agentResponseSenderMatches(msg, agentID, labels) {',
-);
+
 
 replace(
   idlePath,
@@ -316,154 +314,7 @@ replace(
   ].join('\n'),
 );
 const mcpPath = 'suites/go-core/tests/mcp_test.go';
-replace(
-  mcpPath,
-  'mcp overall timeout for agent instances',
-  'ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)',
-  'ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)',
-);
-replace(
-  mcpPath,
-  'mcp response timeout for agent instances',
-  'pollCtx, pollCancel := context.WithTimeout(threadsCtx, 6*time.Minute)',
-  'pollCtx, pollCancel := context.WithTimeout(threadsCtx, 10*time.Minute)',
-);
 
-const agynWaitPath = 'suites/go-core/tests/agent_agyn_wait_test.go';
-replace(
-  agynWaitPath,
-  'agyn wait unique nickname',
-  'agentBNickname := "e2e-agyn-wait-b-fixed"',
-  'agentBNickname := fmt.Sprintf("e2e-aw-b-%s", uuid.NewString()[:8])',
-);
-replace(
-  agynWaitPath,
-  'agyn wait unique ref',
-  'uniqueRef := "e2e-agyn-wait-fixed"',
-  'uniqueRef := fmt.Sprintf("e2e-aw-ref-%s", uuid.NewString()[:8])',
-);
-replace(
-  agynWaitPath,
-  'agyn wait unique sentinel',
-  'sentinel := "e2e-agyn-wait-sentinel-fixed"',
-  'sentinel := fmt.Sprintf("e2e-aw-sentinel-%s", uuid.NewString()[:8])',
-);
-
-replace(
-  agynWaitPath,
-  'agent thread list filter',
-  [
-    '\t\tresp, err := client.ListOrganizationThreads(ctx, &threadsv1.ListOrganizationThreadsRequest{',
-    '\t\t\tOrganizationId: orgID,',
-    '\t\t\tFilter: &threadsv1.ListOrganizationThreadsFilter{',
-    '\t\t\t\tParticipantIdIn: []string{participantA, participantB},',
-    '\t\t\t\tStatusIn:        []threadsv1.ThreadStatus{threadsv1.ThreadStatus_THREAD_STATUS_ACTIVE},',
-    '\t\t\t},',
-  ].join('\n'),
-  [
-    '\t\tresp, err := client.ListOrganizationThreads(ctx, &threadsv1.ListOrganizationThreadsRequest{',
-    '\t\t\tOrganizationId: orgID,',
-    '\t\t\tFilter: &threadsv1.ListOrganizationThreadsFilter{',
-    '\t\t\t\tStatusIn: []threadsv1.ThreadStatus{threadsv1.ThreadStatus_THREAD_STATUS_ACTIVE},',
-    '\t\t\t},',
-  ].join('\n'),
-);
-replace(
-  agynWaitPath,
-  'agent thread participant predicate',
-  'if thread == nil || thread.GetId() == "" || !threadHasParticipants(thread, participantA, participantB) {',
-  'if thread == nil || thread.GetId() == "" || thread.GetId() == excludedThreadID {',
-);
-replace(
-  agynWaitPath,
-  'agent thread lookup signature',
-  'func findThreadWithParticipantsAndMessage(ctx context.Context, client threadsv1.ThreadsServiceClient, orgID, participantA, participantB, bodySubstring string) (*threadsv1.Thread, []*threadsv1.Message, error) {',
-  'func findThreadWithParticipantsAndMessage(ctx context.Context, client threadsv1.ThreadsServiceClient, orgID, participantA, participantB, excludedThreadID, sentBody, replyBody string) (*threadsv1.Thread, []*threadsv1.Message, error) {',
-);
-replace(
-  agynWaitPath,
-  'agent b exact sent and reply lookup',
-  'findThreadWithParticipantsAndMessage(threadsCtx, threadsClient, orgID, agentAID, agentBID, sentinel)',
-  'findThreadWithParticipantsAndMessage(threadsCtx, threadsClient, orgID, agentAID, agentBID, threadAID, "Please reply with "+sentinel, agynWaitAgentBResponse)',
-);
-replace(
-  agynWaitPath,
-  'agent thread exact sent and reply body match',
-  'if messagesContainBodySubstring(messages, bodySubstring) {',
-  'if messagesContainExactBody(messages, sentBody) && messagesContainExactBody(messages, replyBody) {',
-);
-replace(
-  agynWaitPath,
-  'agent thread lookup error',
-  'return fmt.Errorf("thread with participants %s/%s and message containing %q not found", participantA, participantB, bodySubstring)',
-  'return fmt.Errorf("thread with participants %s/%s, sent body %q, and reply body %q not found", participantA, participantB, sentBody, replyBody)',
-);
-replace(
-  agynWaitPath,
-  'exact body helper',
-  [
-    'func messagesContainBodySubstring(messages []*threadsv1.Message, substring string) bool {',
-    '\tfor _, msg := range messages {',
-    '\t\tif strings.Contains(msg.GetBody(), substring) {',
-    '\t\t\treturn true',
-    '\t\t}',
-    '\t}',
-    '\treturn false',
-    '}',
-  ].join('\n'),
-  [
-    'func messagesContainExactBody(messages []*threadsv1.Message, body string) bool {',
-    '\tfor _, msg := range messages {',
-    '\t\tif msg.GetBody() == body {',
-    '\t\t\treturn true',
-    '\t\t}',
-    '\t}',
-    '\treturn false',
-    '}',
-  ].join('\n'),
-);
-replace(
-  agynWaitPath,
-  'agent b reply body check',
-  'if !messagesContainSenderBody(messagesB, agentBID, agynWaitAgentBResponse) {',
-  'if !messagesContainBody(messagesB, agynWaitAgentBResponse) {',
-);
-replace(
-  agynWaitPath,
-  'body contains helper',
-  [
-    'func messagesContainSenderBody(messages []*threadsv1.Message, senderID, body string) bool {',
-    '\tfor _, msg := range messages {',
-    '\t\tif msg.GetSenderId() == senderID && msg.GetBody() == body {',
-    '\t\t\treturn true',
-    '\t\t}',
-    '\t}',
-    '\treturn false',
-    '}',
-  ].join('\n'),
-  [
-    'func messagesContainBody(messages []*threadsv1.Message, body string) bool {',
-    '\tfor _, msg := range messages {',
-    '\t\tif msg.GetBody() == body {',
-    '\t\t\treturn true',
-    '\t\t}',
-    '\t}',
-    '\treturn false',
-    '}',
-  ].join('\n'),
-);
-replace(
-  agynWaitPath,
-  'diagnostic candidate filter',
-  'Filter:         &threadsv1.ListOrganizationThreadsFilter{ParticipantIdIn: []string{agentAID, agentBID}},\n\t\tPageSize:       25,',
-  'Filter:         &threadsv1.ListOrganizationThreadsFilter{StatusIn: []threadsv1.ThreadStatus{threadsv1.ThreadStatus_THREAD_STATUS_ACTIVE}},\n\t\tPageSize:       25,',
-);
-replace(
-  agynWaitPath,
-  'diagnostic participant predicate',
-  'if thread == nil || thread.GetId() == "" || !threadHasParticipants(thread, agentAID, agentBID) {',
-  'if thread == nil || thread.GetId() == "" {',
-);
 
 
 const startRetryPath = 'suites/go-core/tests/workload_start_retry_policy_test.go';
@@ -490,41 +341,24 @@ replace(
   'labelThreadID:  agentParticipantIDForThread(t, threadID, agentID),',
   'labelThreadID:  agentParticipantID,',
 );
-replace(
-  startRetryPath,
-  'start retry failed workload owner',
-  'failedWorkloads, err := waitForFailedWorkloads(failureCtx, runnersClient, threadID, agentID, 2)',
-  'failedWorkloads, err := waitForFailedWorkloads(failureCtx, runnersClient, agentParticipantID, agentID, 2)',
-);
-replace(
-  startRetryPath,
-  'start retry failed latest validation',
-  'assertFailedWorkload(t, failedLatest, threadID, agentID)\n\tassertFailedWorkload(t, failedPrevious, threadID, agentID)',
-  'assertFailedWorkload(t, failedLatest, agentParticipantID, agentID)\n\tassertFailedWorkload(t, failedPrevious, agentParticipantID, agentID)',
-);
-replace(
-  startRetryPath,
-  'start retry all workload owner',
-  'allWorkloads, err := listWorkloadsByThread(ctx, runnersClient, threadID, agentID, nil)',
-  'allWorkloads, err := listWorkloadsByThread(ctx, runnersClient, agentParticipantID, agentID, nil)',
-);
-replace(
-  startRetryPath,
-  'start retry retry workload owner',
-  'retryWorkload, err := waitForRetryWorkload(fastRetryCtx, runnersClient, threadID, agentID, removedAt)',
-  'retryWorkload, err := waitForRetryWorkload(fastRetryCtx, runnersClient, agentParticipantID, agentID, removedAt)',
-);
 
-replace(
-  'suites/go-core/suite.yaml',
-  'optional go-core buf generate',
-  '  buf generate\n\n  tag_args="e2e"',
-  '  if [ "${E2E_SKIP_BUF_GENERATE:-}" != "true" ]; then\n    buf generate\n  fi\n\n  tag_args="e2e"',
-);
+
+
+
+
+
 const actionPath = '.github/actions/run-tests/action.yml';
 replace(
   actionPath,
   'skip nested checkout',
   '    - name: Checkout e2e repository\n      uses: actions/checkout@v4',
   '    - name: Checkout e2e repository\n      if: ${{ false }}\n      uses: actions/checkout@v4',
+);
+// upload-artifact@v4 rejects a second upload under one name, and this job calls
+// run-tests more than once; each call names its suffix.
+replace(
+  actionPath,
+  'distinct artifact name per call',
+  "        name: e2e-artifacts-${{ inputs.service != '' && inputs.service || github.job }}-${{ strategy.job-index || '0' }}\n",
+  "        name: e2e-artifacts-${{ inputs.service != '' && inputs.service || github.job }}-${{ strategy.job-index || '0' }}${{ env.E2E_ARTIFACT_NAME_SUFFIX }}\n",
 );

@@ -251,8 +251,14 @@ func (r *Reconciler) reservePreparedAnchors(ctx context.Context, runner runnerv1
 			if err != nil {
 				return nil, err
 			}
-			v, err = r.updateCheckedVolume(ctx, v, &runnersv1.UpdateVolumeCheckedRequest{Operation: &runnersv1.UpdateVolumeCheckedRequest_BindAnchor{
-				BindAnchor: &runnersv1.BindVolumeResourceAnchor{Anchor: a, WorkloadId: w.Meta.Id, ExpectedPreparationRevision: w.Preparation.Revision, ExpectedAnchorRevision: w.Preparation.Resources.Revision}}})
+			binding := &runnersv1.BindVolumeResourceAnchor{Anchor: a, WorkloadId: w.Meta.Id, ExpectedPreparationRevision: w.Preparation.Revision, ExpectedAnchorRevision: w.Preparation.Resources.Revision}
+			request := &runnersv1.UpdateVolumeCheckedRequest{Operation: &runnersv1.UpdateVolumeCheckedRequest_BindAnchor{BindAnchor: binding}}
+			if v.LifecycleRevision > 1 {
+				// Old registries reject this unknown operation before mutation.
+				// Never downgrade to bind_anchor on any error or missing receipt.
+				request.Operation = &runnersv1.UpdateVolumeCheckedRequest_BindReopenedAnchor{BindReopenedAnchor: binding}
+			}
+			v, err = r.updateCheckedVolume(ctx, v, request)
 			if err != nil {
 				return nil, err
 			}

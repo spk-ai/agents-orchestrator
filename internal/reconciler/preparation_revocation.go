@@ -130,7 +130,7 @@ func validateRevokedWorkspace(w *runnersv1.Workload, anchor *runnerv1.ResourceAn
 		}
 	}
 	reservation := v.AnchorReservation
-	if v.Status != runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING || v.LifecycleRevision != 2 || v.BoundInstance != nil || v.InstanceId != nil ||
+	if v.Status != runnersv1.VolumeStatus_VOLUME_STATUS_PROVISIONING || v.LifecycleRevision != originalAllocationRevision(reservation) || v.BoundInstance != nil || v.InstanceId != nil ||
 		reservation == nil || reservation.PreparationRevision != 1 || reservation.ResourceRevision != 1 {
 		return checkedVolumeError(v, "revocation requires the original unbound workspace generation")
 	}

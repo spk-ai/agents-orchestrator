@@ -1,7 +1,10 @@
 package config
 
 import (
+	"context"
 	"os"
+	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -131,29 +134,70 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 	for _, expected := range []string{
 		// Bootstrap no longer provisions this workflow: the VM does, and it
 		// carries its own platform version rather than a ref to build from.
-		"agynio/e2e/.github/actions/provision-vm@main",
-		"K8S_RUNNER_REF: main",
+		"./.e2e-tooling/.github/actions/provision-vm",
+		"ref: 435b549a937129b6858e7314648eb690894209fe",
+		"K8S_RUNNER_REF: 0bf53883a3569b6c1b2b430eb81955ab7f1ab857",
 		"github.event_name == 'workflow_dispatch' && inputs.k8s_runner_ref || env.K8S_RUNNER_REF",
-		"name: Patch workload Ziti DNS runtime target",
-		"current_router_target=",
-		"kubectl get configmap ziti-workload-dns",
-		"ziti.agyn.dev workload DNS from ",
-		"to ziti-controller-client",
-		"ziti-router.agyn.dev from ",
-		"to ziti-router-edge",
+		// The source runner is patched in place over an older platform
+		// release, so the pinned chart's single-Namespace read is applied and
+		// proven by the runner's own fixture before it deploys.
+		"uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1",
+		"version: v3.19.4",
+		"run: python3 .github/e2e/volume-backend-rbac.py",
+		// Prepared starts need the chart's workload ConfigMap and Secret rules.
+		"run: python3 .github/e2e/workload-rbac.py",
+		"pinned k8s-runner ready-log contract changed",
+		// The suite's npx-launched memory MCP cannot start under the source
+		// catalog's 500m/256Mi sidecar cap, and a 500m default-flavor request
+		// fits one workload pod on the VM; only those values are changed.
+		"pinned k8s-runner sidecar catalog contract changed",
+		`limitsCpu: "2"`,
+		`limitsMemory: "1Gi"`,
+		"pinned k8s-runner default flavor contract changed",
+		`requestsCpu: "100m"`,
+		"kubectl get events -n agyn-workloads --sort-by=.lastTimestamp",
+		"run: python3 .github/e2e/report-workload-cleanup.py",
+		"name: Verify disposable VM native network inventory",
+		"python3 .github/e2e/verify-vm-network.py",
+		"WORKLOAD_TEST_DNS_SERVICE_IP",
+		"WORKLOAD_TEST_DNS_ENDPOINT_IP",
+		"python3 ../.e2e-deps/k8s-runner/.github/e2e/patch-native-client.py .",
 		"dnsPolicy: None",
 		"timeout 10 nc -vz -w 5 ziti-router.agyn.dev 2496",
 		"name: Verify stock sidecar runtime DNS path",
 		"image: openziti/ziti-tunnel:2.0.0-pre10",
 		"bash -c '</dev/tcp/ziti.agyn.dev/2496'",
 		"name: Verify gateway Ziti service binding",
-		"gateway listening on ziti service gateway",
+		// The Gateway's /readyz, not its log text, proves a router-confirmed
+		// terminator; a synthetic agent then dials it over the native overlay.
+		"repository: spk-ai/gateway",
+		"GATEWAY_REF: b80912e71996acdc7a3234e98ce4710c267a6284",
+		"http://127.0.0.1:18090/readyz",
+		"cp ../.github/e2e/gateway_ziti_probe_test.go.txt suites/go-core/tests/gateway_ziti_probe_test.go",
+		`E2E_GO_TEST_RUN: "^TestGatewayZitiNativeTransport$"`,
+		"bash .github/e2e/collect-ziti-diagnostics.sh",
 		"name: Verify llm-proxy Ziti service binding",
-		"llm-proxy listening on ziti service llm-proxy",
+		// The whole log, read before matching: bind retries during a router
+		// data-model lag bury the line under any tail, and an early grep exit
+		// SIGPIPEs kubectl under pipefail.
+		`grep -q 'llm-proxy listening on ziti service llm-proxy' "${RUNNER_TEMP}/llm-proxy.log"`,
 	} {
 		if !strings.Contains(e2eWorkflow, expected) {
 			t.Fatalf("expected E2E workflow to contain %q", expected)
 		}
+	}
+	for _, grant := range []string{"volume-backend-rbac.py", "workload-rbac.py"} {
+		if strings.Index(e2eWorkflow, grant) > strings.Index(e2eWorkflow, "name: Deploy k8s-runner from source") {
+			t.Fatalf("expected %s to precede the k8s-runner source deployment", grant)
+		}
+	}
+	// The cleanup report waits for idle collection, so the failure dump must
+	// describe failing workloads first and the final Ziti snapshot follow it.
+	dump := strings.Index(e2eWorkflow, "name: Print runtime diagnostics on failure")
+	report := strings.Index(e2eWorkflow, "run: python3 .github/e2e/report-workload-cleanup.py")
+	snapshot := strings.Index(e2eWorkflow, `collect-ziti-diagnostics.sh "${RUNNER_TEMP}/ziti-diagnostics/final"`)
+	if dump < 0 || snapshot < 0 || !(dump < report && report < snapshot) {
+		t.Fatal("expected the workload cleanup report between the failure diagnostics and the final Ziti snapshot")
 	}
 	for _, forbidden := range []string{
 		"K8S_RUNNER_REF: noa/issue-73",
@@ -165,6 +209,10 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		"kubectl patch application gateway",
 		"kubectl set env",
 		"kubectl patch application llm-proxy",
+		"kubectl patch networkpolicy",
+		"apply_workload_service_alias",
+		"grep -q 'gateway listening on ziti service gateway'",
+		"--tail=500 2>/dev/null | grep -q 'llm-proxy listening on ziti service llm-proxy'",
 	} {
 		if strings.Contains(e2eWorkflow, forbidden) {
 			t.Fatalf("expected E2E workflow not to contain %q", forbidden)
@@ -474,5 +522,29 @@ func TestFromEnvZitiRuntimeControllerPortInvalid(t *testing.T) {
 	_, err := FromEnv()
 	if err == nil {
 		t.Fatal("expected ZITI_RUNTIME_CONTROLLER_PORT parse error")
+	}
+}
+
+// kubectl writes many Service rows. An early-exit consumer makes its producer
+// fail with SIGPIPE, which aborts discovery when Actions enables pipefail.
+func TestE2EOpenFGAServiceDiscoveryDrainsProducer(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/e2e.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector := regexp.MustCompile(`awk '([^'\n]*tolower\(\$2\)[^'\n]*)'`).FindSubmatch(data)
+	if len(selector) != 2 {
+		t.Fatal("OpenFGA fallback selector missing")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "bash", "-c", `set -o pipefail
+{ printf 'agyn-platform\topenfga\n'; for i in {1..10000}; do printf 'fixture\tservice-%s\n' "$i"; done; printf 'other\topenfga-secondary\n'; } | awk "$1"`, "--", string(selector[1]))
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("service discovery pipeline failed: %v: %s", err, output)
+	}
+	if string(output) != "agyn-platform\topenfga\n" {
+		t.Fatalf("unexpected selected service: %q", output)
 	}
 }

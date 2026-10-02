@@ -258,6 +258,9 @@ func (r *Reconciler) stopPreparedWorkload(ctx context.Context, runner runnerv1.R
 			return err
 		}
 		w, err = r.updatePreparedWorkload(ctx, w, &runnersv1.UpdatePreparedWorkloadRequest{Operation: &runnersv1.UpdatePreparedWorkloadRequest_AbortReservation{AbortReservation: &runnersv1.AbortWorkloadReservation{}}}, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED)
+		if err == nil {
+			r.signalRemovalConfirmed()
+		}
 	} else if phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING && phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED {
 		w, err = r.updatePreparedWorkload(ctx, w, &runnersv1.UpdatePreparedWorkloadRequest{Operation: &runnersv1.UpdatePreparedWorkloadRequest_BeginRemoval{BeginRemoval: &runnersv1.BeginPreparedWorkloadRemoval{}}}, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING)
 	}
@@ -297,6 +300,7 @@ func (r *Reconciler) stopPreparedWorkload(ctx context.Context, runner runnerv1.R
 		if err != nil {
 			return err
 		}
+		r.signalRemovalConfirmed()
 		reflectPreparedWorkload(previous, w)
 	}
 	r.revokePullCredential(ctx, w.Meta.Id)

@@ -204,6 +204,32 @@ func newPreparedControllerFixture(t *testing.T, sandbox bool) *preparedControlle
 	return f
 }
 
+func TestPreparedControllerFlavorAdmissionBinding(t *testing.T) {
+	for _, match := range []bool{false, true} {
+		t.Run(fmt.Sprint(match), func(t *testing.T) {
+			f := newPreparedControllerFixture(t, false)
+			f.metadata.Flavor = "bounded-workload"
+			f.request.Flavor = "different-workload"
+			if match {
+				f.request.Flavor = f.metadata.Flavor
+			}
+			w, err := f.start()
+			if !match {
+				if err == nil || f.w != nil || f.prepares != 0 || f.activations != 0 {
+					t.Fatalf("mismatched flavor reached admission or execution: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if w.Flavor != f.metadata.Flavor || f.lastRequest.Workload.Flavor != w.Flavor {
+				t.Fatal("reserved and executed flavors differ")
+			}
+		})
+	}
+}
+
 func (f *preparedControllerFixture) transition(_ context.Context, req *runnersv1.UpdatePreparedWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.UpdatePreparedWorkloadResponse, error) {
 	if f.w == nil || req.Id != f.w.Meta.Id || req.ExpectedRevision != f.w.Preparation.Revision {
 		return nil, status.Error(codes.Aborted, "revision conflict")
@@ -604,15 +630,14 @@ func TestPreparedControllerRemovalRestartWindows(t *testing.T) {
 
 func TestPreparedControllerUnsafeWorkspacePlan(t *testing.T) {
 	for _, sandbox := range []bool{false, true} {
-		for _, scenario := range []string{"unproven-first-create", "reopened-unbound", "legacy", "other-owner", "other-runner", "other-org", "other-definition", "wrong-size", "pending-removal", "untracked-volume", "duplicate-volume", "other-backend", "missing-bound-pvc", "replaced-bound-pvc", "unknown-inventory", "incomplete-inventory"} {
+		for _, scenario := range []string{"unproven-first-create", "reopened-stale-receipt", "legacy", "other-owner", "other-runner", "other-org", "other-definition", "wrong-size", "pending-removal", "untracked-volume", "duplicate-volume", "other-backend", "missing-bound-pvc", "replaced-bound-pvc", "unknown-inventory", "incomplete-inventory"} {
 			t.Run(fmt.Sprintf("sandbox=%t/%s", sandbox, scenario), func(t *testing.T) {
 				f := newPreparedControllerFixture(t, sandbox)
 				switch scenario {
 				case "unproven-first-create":
 					f.created = nil
-				case "reopened-unbound":
+				case "reopened-stale-receipt":
 					f.v.LifecycleRevision = 3
-					f.created[0].checked.LifecycleRevision = 3
 				case "legacy":
 					f.v.CheckedLifecycle = false
 				case "other-owner":

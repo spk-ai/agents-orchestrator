@@ -1,0 +1,201 @@
+//go:build e2e && svc_agents_orchestrator
+
+package tests
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	zitiv1 "github.com/agynio/e2e/suites/go-core/.gen/go/agynio/api/ziti_management/v1"
+	"github.com/google/uuid"
+	"github.com/openziti/sdk-golang/ziti"
+	"github.com/openziti/sdk-golang/ziti/enroll"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// Native transport proof of the Gateway's Ziti binding. /readyz only reports a
+// router-confirmed terminator; this dials that terminator the way an agent
+// workload does. The identity is synthetic, enrolled in memory and deleted;
+// enrollment tokens and key material never reach logs.
+const (
+	gatewayProbeService = "gateway"
+	// A new identity reaches the edge router through its data model, so the
+	// first dials may be rejected; the bound keeps a stale router a failure.
+	gatewayProbeDialBound    = 150 * time.Second
+	gatewayProbeDialInterval = 2 * time.Second
+)
+
+var gatewayProbeSecrets = regexp.MustCompile(`eyJ[\w-]+\.[\w-]+\.[\w-]*|token=[^&\s"']+|pem:[^'"\s]+`)
+
+type gatewayProbeDialError struct{ err error }
+
+func (e gatewayProbeDialError) Error() string { return e.err.Error() }
+func (e gatewayProbeDialError) Unwrap() error { return e.err }
+
+func TestGatewayZitiNativeTransport(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	mgmt := zitiv1.NewZitiManagementServiceClient(dialGRPC(t, zitiManagementAddr(t)))
+
+	agentID, workloadID := uuid.NewString(), uuid.NewString()
+	created, err := mgmt.CreateAgentIdentity(ctx, &zitiv1.CreateAgentIdentityRequest{AgentId: agentID, WorkloadId: workloadID})
+	if err != nil {
+		t.Fatalf("create synthetic agent identity: %v", err)
+	}
+	createdAt := time.Now()
+	id, token := created.GetZitiIdentityId(), created.GetEnrollmentJwt()
+	if id == "" || token == "" {
+		t.Fatal("create synthetic agent identity: missing identity id or enrollment token")
+	}
+	t.Logf("synthetic agent instance %s (workload %s) has Ziti identity %s", agentID, workloadID, id)
+	deleted := false
+	t.Cleanup(func() {
+		if deleted {
+			return
+		}
+		cleanupCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		defer stop()
+		if _, err := mgmt.DeleteIdentity(cleanupCtx, &zitiv1.DeleteIdentityRequest{ZitiIdentityId: id}); err != nil {
+			t.Errorf("delete synthetic agent identity %s: %v", id, err)
+		}
+	})
+
+	overlay, err := ziti.NewContext(enrollGatewayProbe(t, token))
+	if err != nil {
+		t.Fatalf("initialize native overlay: %s", redactGatewayProbe(err, token))
+	}
+	t.Cleanup(overlay.Close)
+	client := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			conn, err := overlay.DialContext(ctx, gatewayProbeService)
+			if err != nil {
+				return nil, gatewayProbeDialError{err}
+			}
+			return conn, nil
+		},
+	}}
+
+	code, body := getGatewayProbeMe(ctx, t, client, createdAt, token)
+	if code != http.StatusOK {
+		t.Fatalf("native Gateway /me: status %d, want 200: %s", code, body)
+	}
+	var me struct {
+		IdentityID   string `json:"identity_id"`
+		IdentityType string `json:"identity_type"`
+	}
+	if err := json.Unmarshal([]byte(body), &me); err != nil {
+		t.Fatalf("decode native Gateway /me: %v", err)
+	}
+	// Only the Gateway resolves the dialing Ziti identity to this agent instance.
+	if me.IdentityID != agentID || me.IdentityType != "agent_instance" {
+		t.Fatalf("native Gateway /me resolved %q (%s), want synthetic agent instance %q", me.IdentityID, me.IdentityType, agentID)
+	}
+	liveness, err := mgmt.GetIdentityLiveness(ctx, &zitiv1.GetIdentityLivenessRequest{ZitiIdentityId: id})
+	if err != nil {
+		t.Fatalf("synthetic identity liveness: %v", err)
+	}
+	if liveness.GetEnrollmentState() != zitiv1.IdentityEnrollmentState_IDENTITY_ENROLLMENT_STATE_ENROLLED {
+		t.Fatalf("synthetic identity enrollment state %s, want enrolled", liveness.GetEnrollmentState())
+	}
+	t.Logf("controller reports edge router connection for %s: %v", id, liveness.GetHasEdgeRouterConnection())
+
+	// The raw TCP listener must never treat a credential-less request as a workload.
+	base := strings.TrimRight(envOrDefault("AGYN_BASE_URL", "http://gateway:8080"), "/")
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/me", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := (&http.Client{Timeout: 20 * time.Second}).Do(request)
+	if err != nil {
+		t.Fatalf("raw TCP Gateway /me: %v", err)
+	}
+	rawBody, _ := io.ReadAll(io.LimitReader(raw.Body, 4096))
+	raw.Body.Close()
+	if raw.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("raw TCP Gateway /me without credentials: status %d, want 401: %s", raw.StatusCode, strings.TrimSpace(string(rawBody)))
+	}
+
+	overlay.Close()
+	if _, err := mgmt.DeleteIdentity(ctx, &zitiv1.DeleteIdentityRequest{ZitiIdentityId: id}); err != nil {
+		t.Fatalf("delete synthetic agent identity %s: %v", id, err)
+	}
+	deleted = true
+	if _, err := mgmt.ResolveIdentity(ctx, &zitiv1.ResolveIdentityRequest{ZitiIdentityId: id}); status.Code(err) != codes.NotFound {
+		t.Fatalf("deleted synthetic identity %s still resolves: %v", id, err)
+	}
+	// ziti-management 0.13.0 reports a controller-side miss as "identity not found".
+	if _, err := mgmt.GetIdentityLiveness(ctx, &zitiv1.GetIdentityLivenessRequest{ZitiIdentityId: id}); err == nil || !strings.Contains(err.Error(), "identity not found") {
+		t.Fatalf("controller still reports deleted synthetic identity %s: %v", id, err)
+	}
+}
+
+// enrollGatewayProbe enrolls with a generated in-memory key; no file is written.
+func enrollGatewayProbe(t *testing.T, token string) *ziti.Config {
+	t.Helper()
+	claims, _, err := enroll.ParseToken(token)
+	if err != nil {
+		t.Fatalf("parse synthetic enrollment token: %s", redactGatewayProbe(err, token))
+	}
+	var keyAlg ziti.KeyAlgVar
+	if err := keyAlg.Set("EC"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := enroll.Enroll(enroll.EnrollmentFlags{Token: claims, KeyAlg: keyAlg})
+	if err != nil {
+		t.Fatalf("enroll synthetic agent identity in memory: %s", redactGatewayProbe(err, token, claims.ID))
+	}
+	return cfg
+}
+
+// getGatewayProbeMe retries only overlay dial failures. Once a connection is
+// routed, the Gateway's answer is the result.
+func getGatewayProbeMe(ctx context.Context, t *testing.T, client *http.Client, since time.Time, token string) (int, string) {
+	t.Helper()
+	deadline := time.Now().Add(gatewayProbeDialBound)
+	last := ""
+	for attempt := 1; ; attempt++ {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+gatewayProbeService+"/me", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := client.Do(request)
+		if err == nil {
+			body, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+			response.Body.Close()
+			t.Logf("Ziti service %q answered on attempt %d, %s after identity creation", gatewayProbeService, attempt, time.Since(since).Round(time.Millisecond))
+			return response.StatusCode, strings.TrimSpace(string(body))
+		}
+		var dialErr gatewayProbeDialError
+		if !errors.As(err, &dialErr) {
+			t.Fatalf("native Gateway request failed after dial: %s", redactGatewayProbe(err, token))
+		}
+		if message := redactGatewayProbe(dialErr, token); message != last {
+			last = message
+			t.Logf("Ziti service %q not dialable (attempt %d, %s after identity creation): %s", gatewayProbeService, attempt, time.Since(since).Round(time.Millisecond), message)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Ziti service %q not dialable within %s: %s", gatewayProbeService, gatewayProbeDialBound, last)
+		}
+		time.Sleep(gatewayProbeDialInterval)
+	}
+}
+
+func redactGatewayProbe(err error, secrets ...string) string {
+	message := err.Error()
+	for _, secret := range secrets {
+		if secret != "" {
+			message = strings.ReplaceAll(message, secret, "[redacted]")
+		}
+	}
+	return gatewayProbeSecrets.ReplaceAllString(message, "[redacted]")
+}

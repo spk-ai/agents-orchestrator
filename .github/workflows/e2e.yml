@@ -9,57 +9,57 @@ on:
       k8s_runner_ref:
         description: k8s-runner ref to deploy from.
         required: false
-        default: main
+        default: 13921ea6affc091054a0df9be50df9c5ee315ef7
       agents_ref:
         description: Agents ref to deploy from.
         required: false
-        default: main
+        default: df88f90f6aee77647912e7336e03d43545a2a6a4
       authorization_ref:
         description: Authorization ref to deploy from.
         required: false
-        default: main
+        default: 30581ca4f834ad8a0a63e14bd0f465333b3929e9
       runners_ref:
         description: Runners ref to deploy from.
         required: false
-        default: main
+        default: 31df7a2fb51736ff2c0e05968c39636808596db5
       identity_ref:
         description: Identity ref to deploy from.
         required: false
-        default: main
+        default: 47aaabc67acfad0b80ca97d5e1b27f96b670f27f
       threads_ref:
         description: Threads ref to deploy from.
         required: false
-        default: main
+        default: 066fe51e57343b130b38af09d061a6540e0e8e20
       agynd_cli_ref:
         description: agynd-cli ref to build workload daemon from.
         required: false
-        default: main
+        default: 495920a92cc359e0693e8710f11469240bd5a770
       expose_ref:
         description: Expose ref to deploy from.
         required: false
-        default: main
+        default: da7ef4ffd81fcd829dba6e35c6467e958e209df5
       gateway_ref:
         description: Gateway ref to deploy from.
         required: false
-        default: main
+        default: 45171b64043510f2df643ba7b9938800733a98e7
       llm_proxy_ref:
         description: llm-proxy ref to deploy from.
         required: false
-        default: main
+        default: 212b0a8b90c377cc76ca00c389434921270b572a
 
 # Init images are resolved to the newest published release by the run-tests
 # action. Pinning one here opts this workflow out of every fix shipped after it.
 env:
-  K8S_RUNNER_REF: main
-  AGENTS_REF: main
-  AUTHORIZATION_REF: main
-  RUNNERS_REF: main
-  IDENTITY_REF: main
-  THREADS_REF: main
-  AGYND_CLI_REF: main
-  EXPOSE_REF: main
-  GATEWAY_REF: main
-  LLM_PROXY_REF: main
+  K8S_RUNNER_REF: 0bf53883a3569b6c1b2b430eb81955ab7f1ab857
+  AGENTS_REF: df88f90f6aee77647912e7336e03d43545a2a6a4
+  AUTHORIZATION_REF: 30581ca4f834ad8a0a63e14bd0f465333b3929e9
+  RUNNERS_REF: 31df7a2fb51736ff2c0e05968c39636808596db5
+  IDENTITY_REF: 47aaabc67acfad0b80ca97d5e1b27f96b670f27f
+  THREADS_REF: 066fe51e57343b130b38af09d061a6540e0e8e20
+  AGYND_CLI_REF: 495920a92cc359e0693e8710f11469240bd5a770
+  EXPOSE_REF: da7ef4ffd81fcd829dba6e35c6467e958e209df5
+  GATEWAY_REF: b80912e71996acdc7a3234e98ce4710c267a6284
+  LLM_PROXY_REF: 212b0a8b90c377cc76ca00c389434921270b572a
 
 permissions:
   contents: read
@@ -76,11 +76,24 @@ jobs:
       - name: Checkout service
         uses: actions/checkout@v4
 
+      - name: Checkout pinned E2E tooling
+        uses: actions/checkout@v4
+        with:
+          repository: agynio/e2e
+          ref: 435b549a937129b6858e7314648eb690894209fe
+          path: .e2e-tooling
+          persist-credentials: false
+
+      - name: Prepare disposable VM image repair and diagnostics
+        run: python3 .github/e2e/prepare.py .e2e-tooling
+
       - name: Provision cluster
-        uses: agynio/e2e/.github/actions/provision-vm@main
+        uses: ./.e2e-tooling/.github/actions/provision-vm
+        with:
+          agyn-cli-version: v0.19.0
 
       - name: Setup DevSpace
-        uses: agynio/e2e/.github/actions/setup-devspace@main
+        uses: agynio/e2e/.github/actions/setup-devspace@435b549a937129b6858e7314648eb690894209fe
 
       - name: Install buf
         uses: bufbuild/buf-setup-action@v1
@@ -142,7 +155,7 @@ jobs:
         working-directory: .e2e-deps/agynd-cli
         run: |-
           set -euo pipefail
-          buf generate buf.build/agynio/api
+          buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto
           mkdir -p .build
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o .build/agynd ./cmd/agynd
 
@@ -237,13 +250,13 @@ jobs:
           set -euo pipefail
           dump_authorization_model_diagnostics() {
             echo "== authorization model diagnostics ==" >&2
-            kubectl get secret authorization-openfga -n platform -o yaml >&2 || true
+            kubectl get secret authorization-openfga -n agyn-platform -o name >&2 || true
             kubectl get application authorization -n argocd -o yaml >&2 || true
-            kubectl get deployment authorization -n platform -o yaml >&2 || true
+            kubectl get deployment authorization -n agyn-platform -o yaml >&2 || true
             kubectl get svc -A -o wide | grep -i openfga >&2 || true
-            kubectl get pods -n platform -l app.kubernetes.io/name=authorization -o wide >&2 || true
-            kubectl logs -n platform -l app.kubernetes.io/name=authorization --all-containers --tail=300 >&2 || true
-            kubectl get events -n platform --sort-by=.metadata.creationTimestamp >&2 || true
+            kubectl get pods -n agyn-platform -l app.kubernetes.io/name=authorization -o wide >&2 || true
+            kubectl logs -n agyn-platform -l app.kubernetes.io/name=authorization --all-containers --tail=300 >&2 || true
+            kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_authorization_model_diagnostics ERR
           secret_name="authorization-openfga"
@@ -253,13 +266,13 @@ jobs:
               --type merge \
               -p '{"spec":{"syncPolicy":{"automated":null}}}'
           fi
-          openfga_namespace="openfga"
+          openfga_namespace="agyn-platform"
           openfga_service="$(kubectl get svc -n "${openfga_namespace}" -l app.kubernetes.io/name=openfga -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
           if [ -z "${openfga_service}" ] && kubectl get svc openfga -n "${openfga_namespace}" >/dev/null 2>&1; then
             openfga_service="openfga"
           fi
           if [ -z "${openfga_service}" ]; then
-            openfga_ref="$(kubectl get svc -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' | awk 'tolower($2) ~ /openfga/ { print; exit }')"
+            openfga_ref="$(kubectl get svc -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' | awk '!found && tolower($2) ~ /openfga/ { print; found=1 }')"
             if [ -n "${openfga_ref}" ]; then
               openfga_namespace="$(printf '%s' "${openfga_ref}" | awk '{ print $1 }')"
               openfga_service="$(printf '%s' "${openfga_ref}" | awk '{ print $2 }')"
@@ -360,22 +373,22 @@ jobs:
             echo "authorization model id missing" >&2
             exit 1
           fi
-          kubectl create secret generic "${secret_name}" -n platform \
+          kubectl create secret generic "${secret_name}" -n agyn-platform \
             --from-literal=OPENFGA_STORE_ID="${store_id}" \
             --from-literal=OPENFGA_MODEL_ID="${model_id}" \
             --dry-run=client -o yaml | kubectl apply -f -
-          authorization_deployment="$(kubectl get deployment -n platform -l app.kubernetes.io/name=authorization -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+          authorization_deployment="$(kubectl get deployment -n agyn-platform -l app.kubernetes.io/name=authorization -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
           if [ -z "${authorization_deployment}" ]; then
             echo "authorization deployment not found" >&2
-            kubectl get deployment -n platform -o wide >&2 || true
+            kubectl get deployment -n agyn-platform -o wide >&2 || true
             exit 1
           fi
-          kubectl patch deployment "${authorization_deployment}" -n platform --type=json -p "$(cat <<PATCH
+          kubectl patch deployment "${authorization_deployment}" -n agyn-platform --type=json -p "$(cat <<PATCH
           [{"op":"replace","path":"/spec/template/spec/containers/0/env","value":[{"name":"GRPC_ADDRESS","value":":50051"},{"name":"OPENFGA_API_URL","value":"http://${openfga_service}.${openfga_namespace}.svc.cluster.local:${openfga_port}"},{"name":"OPENFGA_STORE_ID","value":"${store_id}"},{"name":"OPENFGA_MODEL_ID","value":"${model_id}"}]}]
           PATCH
           )"
-          kubectl rollout status "deployment/${authorization_deployment}" -n platform --timeout=240s
-          current_model_id="$(kubectl get deployment "${authorization_deployment}" -n platform -o jsonpath='{range .spec.template.spec.containers[0].env[?(@.name=="OPENFGA_MODEL_ID")]}{.value}{end}')"
+          kubectl rollout status "deployment/${authorization_deployment}" -n agyn-platform --timeout=240s
+          current_model_id="$(kubectl get deployment "${authorization_deployment}" -n agyn-platform -o jsonpath='{range .spec.template.spec.containers[0].env[?(@.name=="OPENFGA_MODEL_ID")]}{.value}{end}')"
           if [ "${current_model_id}" != "${model_id}" ]; then
             echo "authorization deployment OPENFGA_MODEL_ID mismatch: expected ${model_id}, got ${current_model_id}" >&2
             exit 1
@@ -390,10 +403,28 @@ jobs:
           path: .e2e-deps/agents
 
       - name: Deploy agents from source
+        timeout-minutes: 16
         working-directory: .e2e-deps/agents
         run: |-
           set -euo pipefail
-          devspace dev
+          dump_agents_source_diagnostics() {
+            kubectl get pods -n agyn-platform -l app.kubernetes.io/name=agents -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l app.kubernetes.io/name=agents >&2 || true
+            kubectl logs -n agyn-platform -l app.kubernetes.io/name=agents --all-containers --tail=200 >&2 || true
+            kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
+          }
+          trap dump_agents_source_diagnostics ERR
+          # Pin both host generation and the container's first-sync fallback.
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          p = Path('devspace.yaml')
+          s = p.read_text()
+          old = 'buf generate buf.build/agynio/api'
+          assert s.count(old) == 1, 'pinned agents DevSpace contract changed'
+          p.write_text(s.replace(old, 'buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto'))
+          PYCODE
+          buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto --path agynio/api/agents/v1 --path agynio/api/authorization/v1 --path agynio/api/identity/v1 --path agynio/api/images/v1 --path agynio/api/notifications/v1 --path agynio/api/organizations/v1
+          timeout --signal=TERM --kill-after=30s 14m devspace dev
 
       - name: Checkout identity
         uses: actions/checkout@v4
@@ -410,20 +441,28 @@ jobs:
             selector="app.kubernetes.io/name=identity"
             echo "== identity source deployment diagnostics ==" >&2
             kubectl get application identity -n argocd -o yaml >&2 || true
-            kubectl get deployment identity -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
+            kubectl get deployment identity -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
             echo "== identity current logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=500 >&2 || true
             echo "== identity previous logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
             echo "== platform events ==" >&2
-            kubectl get events -n platform --sort-by=.metadata.creationTimestamp >&2 || true
+            kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_identity_source_diagnostics ERR
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          p = Path('devspace.yaml')
+          s = p.read_text()
+          old = '  IDENTITY_NAMESPACE: platform'
+          assert s.count(old) == 1, 'pinned identity namespace contract changed'
+          p.write_text(s.replace(old, '  IDENTITY_NAMESPACE: agyn-platform'))
+          PYCODE
           mkdir -p dist
-          buf generate buf.build/agynio/api --path agynio/api/identity/v1 --path agynio/api/authorization/v1
+          buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto --path agynio/api/identity/v1 --path agynio/api/authorization/v1
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dist/identity-devspace ./cmd/identity-service
           devspace dev
 
@@ -435,10 +474,10 @@ jobs:
           extra_pods=""
           elapsed=0
           while [ "${elapsed}" -lt 180 ]; do
-            source_pod="$(kubectl get pods -n platform -l "${selector}" \
+            source_pod="$(kubectl get pods -n agyn-platform -l "${selector}" \
               -o jsonpath='{range .items[?(@.spec.containers[0].image=="ghcr.io/agynio/devcontainer-go:1")]}{.metadata.name}{"\n"}{end}' \
               | head -n 1)"
-            extra_pods="$(kubectl get pods -n platform -l "${selector}" \
+            extra_pods="$(kubectl get pods -n agyn-platform -l "${selector}" \
               -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\n"}{end}' \
               | awk '$2 != "ghcr.io/agynio/devcontainer-go:1" { print }')"
             if [ -n "${source_pod}" ] && [ -z "${extra_pods}" ]; then
@@ -456,14 +495,14 @@ jobs:
               printf '%s\n' "${extra_pods}" >&2
             fi
             kubectl get application identity -n argocd -o yaml >&2 || true
-            kubectl get deployment identity -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=300 >&2 || true
+            kubectl get deployment identity -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=300 >&2 || true
             exit 1
           fi
-          kubectl logs "pod/${source_pod}" -n platform --all-containers --tail=200
+          kubectl logs "pod/${source_pod}" -n agyn-platform --all-containers --tail=200
 
       - name: Register cluster-admin identities
         working-directory: .e2e-deps/identity
@@ -480,7 +519,7 @@ jobs:
               identity_ids="$(printf '%s\n%s' "${identity_ids}" "${gateway_identity_id}")"
             fi
           fi
-          kubectl port-forward -n platform svc/identity 15051:50051 >/tmp/identity-port-forward.log 2>&1 &
+          kubectl port-forward -n agyn-platform svc/identity 15051:50051 >/tmp/identity-port-forward.log 2>&1 &
           port_forward_pid="$!"
           cleanup() {
             kill "${port_forward_pid}" >/dev/null 2>&1 || true
@@ -570,19 +609,30 @@ jobs:
             selector="app.kubernetes.io/name=threads"
             echo "== threads source deployment diagnostics ==" >&2
             kubectl get application threads -n argocd -o yaml >&2 || true
-            kubectl get deployment threads-threads -n platform -o yaml >&2 || kubectl get deployment threads -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
+            kubectl get deployment threads-threads -n agyn-platform -o yaml >&2 || kubectl get deployment threads -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
             echo "== threads current logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=500 >&2 || true
             echo "== threads previous logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
             echo "== platform events ==" >&2
-            kubectl get events -n platform --sort-by=.metadata.creationTimestamp >&2 || true
+            kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_threads_source_diagnostics ERR
-          buf generate buf.build/agynio/api --path agynio/api/threads/v1 --path agynio/api/notifications/v1 --path agynio/api/identity/v1 --path agynio/api/metering/v1 --path agynio/api/authorization/v1 --path agynio/api/agents/v1
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          p = Path('devspace.yaml')
+          s = p.read_text()
+          old = '  THREADS_NAMESPACE: platform'
+          assert s.count(old) == 1, 'pinned threads namespace contract changed'
+          s = s.replace(old, '  THREADS_NAMESPACE: agyn-platform')
+          old = 'buf generate buf.build/agynio/api'
+          assert s.count(old) == 2, 'pinned threads startup and test-pipeline API generation contracts changed'
+          p.write_text(s.replace(old, 'buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto'))
+          PYCODE
+          buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto --path agynio/api/threads/v1 --path agynio/api/notifications/v1 --path agynio/api/identity/v1 --path agynio/api/metering/v1 --path agynio/api/authorization/v1 --path agynio/api/agents/v1
           CGO_ENABLED=0 go test ./internal/server -run 'TestCreateThreadStoresAgentInstanceForAgentClassParticipant' -count=1
           devspace dev
 
@@ -594,10 +644,10 @@ jobs:
           extra_pods=""
           elapsed=0
           while [ "${elapsed}" -lt 180 ]; do
-            source_pod="$(kubectl get pods -n platform -l "${selector}" \
+            source_pod="$(kubectl get pods -n agyn-platform -l "${selector}" \
               -o jsonpath='{range .items[?(@.spec.containers[0].image=="ghcr.io/agynio/devcontainer-go:1")]}{.metadata.name}{"\n"}{end}' \
               | head -n 1)"
-            extra_pods="$(kubectl get pods -n platform -l "${selector}" \
+            extra_pods="$(kubectl get pods -n agyn-platform -l "${selector}" \
               -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\n"}{end}' \
               | awk '$2 != "ghcr.io/agynio/devcontainer-go:1" { print }')"
             if [ -n "${source_pod}" ] && [ -z "${extra_pods}" ]; then
@@ -615,19 +665,19 @@ jobs:
               printf '%s\n' "${extra_pods}" >&2
             fi
             kubectl get application threads -n argocd -o yaml >&2 || true
-            kubectl get deployment threads-threads -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=300 >&2 || true
+            kubectl get deployment threads-threads -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=300 >&2 || true
             exit 1
           fi
-          kubectl logs "pod/${source_pod}" -n platform --all-containers --tail=200
+          kubectl logs "pod/${source_pod}" -n agyn-platform --all-containers --tail=200
 
       - name: Checkout runners
         uses: actions/checkout@v4
         with:
-          repository: agynio/runners
+          repository: spk-ai/runners
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.runners_ref || env.RUNNERS_REF }}
           path: .e2e-deps/runners
 
@@ -648,7 +698,7 @@ jobs:
           # runners main carries the agent-instance work (owner_kind/owner_id,
           # ListWorkloadsByAgentInstance, ListVolumesByAgentInstance) since #71,
           # so the patch that used to add it now duplicates declarations.
-          buf generate buf.build/agynio/api \
+          buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto \
             --include-imports \
             --path agynio/api/agents/v1 \
             --path agynio/api/runners/v1 \
@@ -668,10 +718,10 @@ jobs:
           extra_pods=""
           elapsed=0
           while [ "${elapsed}" -lt 180 ]; do
-            source_pod="$(kubectl get pods -n platform -l "${selector}" \
+            source_pod="$(kubectl get pods -n agyn-platform -l "${selector}" \
               -o jsonpath='{range .items[?(@.spec.containers[0].image=="ghcr.io/agynio/devcontainer-go:1")]}{.metadata.name}{"\n"}{end}' \
               | head -n 1)"
-            extra_pods="$(kubectl get pods -n platform -l "${selector}" \
+            extra_pods="$(kubectl get pods -n agyn-platform -l "${selector}" \
               -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\n"}{end}' \
               | awk '$2 != "ghcr.io/agynio/devcontainer-go:1" { print }')"
             if [ -n "${source_pod}" ] && [ -z "${extra_pods}" ]; then
@@ -689,13 +739,13 @@ jobs:
               printf '%s\n' "${extra_pods}" >&2
             fi
             cat /tmp/runners-devspace.log >&2 || true
-            kubectl get deployment runners -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
+            kubectl get deployment runners -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
             exit 1
           fi
-          kubectl logs "pod/${source_pod}" -n platform --all-containers --tail=200
+          kubectl logs "pod/${source_pod}" -n agyn-platform --all-containers --tail=200
 
       - name: Checkout expose
         uses: actions/checkout@v4
@@ -712,16 +762,16 @@ jobs:
             selector="app.kubernetes.io/name=expose"
             echo "== expose source deployment diagnostics ==" >&2
             kubectl get application expose -n argocd -o yaml >&2 || true
-            kubectl get deployment expose -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
+            kubectl get deployment expose -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
             echo "== expose current logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=500 >&2 || true
             echo "== expose previous logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
             echo "== platform events ==" >&2
-            kubectl get events -n platform --sort-by=.metadata.creationTimestamp >&2 || true
+            kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_expose_source_diagnostics ERR
           if kubectl get application expose -n argocd >/dev/null 2>&1; then
@@ -729,9 +779,11 @@ jobs:
               --type merge \
               -p '{"spec":{"syncPolicy":{"automated":null}}}'
           fi
-          buf generate buf.build/agynio/api \
+          buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto \
             --include-imports \
             --path agynio/api/expose/v1 \
+            --path agynio/api/agents/v1 \
+            --path agynio/api/organizations/v1 \
             --path agynio/api/ziti_management/v1 \
             --path agynio/api/runners/v1 \
             --path agynio/api/runner/v1 \
@@ -739,21 +791,51 @@ jobs:
             --path agynio/api/identity/v1 \
             --path agynio/api/authorization/v1
           gofmt -w internal/server/server.go internal/server/server_test.go
-          CGO_ENABLED=0 go test ./internal/server -run 'TestAddExposureAllowsAgentInstanceOwner|TestAddExposureHappyPath|TestListExposuresSuccess' -count=1
+          CGO_ENABLED=0 go test ./internal/server -count=1
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          p = Path('Dockerfile')
+          s = p.read_text()
+          old = 'RUN buf generate buf.build/agynio/api'
+          assert s.count(old) == 1 and s.count('WORKDIR /src') == 1, 'pinned expose build contract changed'
+          s = s.replace('WORKDIR /src', 'WORKDIR /src\nRUN apk add --no-cache git')
+          p.write_text(s.replace(old, 'RUN buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto'))
+          PYCODE
           image="e2e/expose:agent-instances"
           docker build -t "${image}" .
           agyn local load-image "${image}"
-          kubectl patch deployment expose -n platform --type merge -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
-          kubectl set image deployment/expose -n platform expose="${image}"
-          kubectl rollout status deployment/expose -n platform --timeout=240s
-          kubectl logs deployment/expose -n platform --all-containers --tail=200
+          kubectl patch deployment expose -n agyn-platform --type merge -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
+          kubectl set image deployment/expose -n agyn-platform expose="${image}"
+          kubectl rollout status deployment/expose -n agyn-platform --timeout=240s
+          kubectl logs deployment/expose -n agyn-platform --all-containers --tail=200
 
       - name: Checkout k8s-runner
         uses: actions/checkout@v4
         with:
-          repository: agynio/k8s-runner
+          repository: spk-ai/k8s-runner
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.k8s_runner_ref || env.K8S_RUNNER_REF }}
           path: .e2e-deps/k8s-runner
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.19.4
+
+      # The VM's platform release predates the chart's volume-backend grant and
+      # the source deployment is patched in place, so apply the pinned chart's
+      # own render, exactly as k8s-runner's E2E does. The script proves the only
+      # added permission is get on the single workload Namespace.
+      - name: Grant the source chart's volume-backend namespace read
+        working-directory: .e2e-deps/k8s-runner
+        run: python3 .github/e2e/volume-backend-rbac.py
+
+      # Prepared starts keep revocation records in workload ConfigMaps and give
+      # Pod ownership to startup Secrets; the VM's release predates those rules.
+      # The pinned script proves the grant is the chart's own Role, confined to
+      # the workload namespace.
+      - name: Grant the source chart's workload rules
+        working-directory: .e2e-deps/k8s-runner
+        run: python3 .github/e2e/workload-rbac.py
 
       - name: Deploy k8s-runner from source
         working-directory: .e2e-deps/k8s-runner
@@ -763,255 +845,60 @@ jobs:
             selector="app.kubernetes.io/name=k8s-runner"
             echo "== k8s-runner source deployment diagnostics ==" >&2
             kubectl get application k8s-runner -n argocd -o yaml >&2 || true
-            kubectl get deployment k8s-runner -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
+            kubectl get deployment k8s-runner -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
             echo "== k8s-runner current logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=500 >&2 || true
             echo "== k8s-runner previous logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
             echo "== platform events ==" >&2
-            kubectl get events -n platform --sort-by=.metadata.creationTimestamp >&2 || true
+            kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_k8s_runner_source_diagnostics ERR
+          # While the router's data model lags a new identity, SDK bind retries
+          # log thousands of lines a second and push the ready line out of a
+          # 200-line tail; the runner binds once the router catches up. Read
+          # the whole log and drain it, so kubectl never sees SIGPIPE.
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          p = Path('devspace.yaml')
+          s = p.read_text()
+          old = ('until kubectl logs -n ${K8S_RUNNER_NAMESPACE} -l "${LABEL_SELECTOR}" --tail=200 2>/dev/null | \\\n'
+                 '      grep -q "gRPC server starting"; do')
+          assert s.count(old) == 1, 'pinned k8s-runner ready-log contract changed'
+          new = old.replace('--tail=200', '--tail=-1').replace(
+              'grep -q "gRPC server starting"', "awk '/gRPC server starting/ { found = 1 } END { exit !found }'")
+          p.write_text(s.replace(old, new))
+          # Two fits for this disposable VM's catalog; every other value stays
+          # as pinned.
+          # - The catalog caps every sidecar, MCP servers included, at 500m and
+          #   256Mi. The suite's memory MCP is stateless `npx -y supergateway`
+          #   spawning `npx -y @modelcontextprotocol/server-memory` per request.
+          #   Under 256Mi the install is OOM-killed; under 500m it outlasts
+          #   agynd's fixed 10s readiness request, and supergateway 3.4.3 then
+          #   exits on the late reply ("No connection established for request
+          #   ID: agynd-mcp-ready"). Sidecars get the main container's 2 CPUs
+          #   and 1Gi, still a budget of their own.
+          # - The source-run services already reserve ~3.1 of the VM's 4 CPUs,
+          #   so a 500m default-flavor request admits one workload pod at a
+          #   time ("Insufficient cpu"). Agent-to-agent tests need two at
+          #   once and the start-retry test waits on the previous test's pod,
+          #   so the default flavor reserves 100m; its 2-CPU limit is unchanged.
+          c = Path('catalog.dev.yaml')
+          cs = c.read_text()
+          cap = '    sidecarResources:\n      requestsCpu: "50m"\n      requestsMemory: "64Mi"\n      limitsCpu: "500m"\n      limitsMemory: "256Mi"\n'
+          assert cs.count(cap) == 2, 'pinned k8s-runner sidecar catalog contract changed'
+          cs = cs.replace(cap, cap.replace('limitsCpu: "500m"', 'limitsCpu: "2"').replace('limitsMemory: "256Mi"', 'limitsMemory: "1Gi"'))
+          reserve = '  - name: ram-2gb\n    default: true\n    resources:\n      requestsCpu: "500m"\n'
+          assert cs.count(reserve) == 1, 'pinned k8s-runner default flavor contract changed'
+          c.write_text(cs.replace(reserve, reserve.replace('requestsCpu: "500m"', 'requestsCpu: "100m"')))
+          PYCODE
           devspace run deploy
 
-      # Validation shim only: source-of-truth workload egress belongs in k8s-runner.
-      # Keep this PR check strict while regular E2E consumes main refs.
-      - name: Allow workload Ziti egress
-        run: |-
-          set -euo pipefail
-          service_endpoint_ips() {
-            kubectl get endpoints "$1" -n "$2" -o jsonpath='{range .subsets[*].addresses[*]}{.ip}{" "}{end}'
-          }
-          # Whichever resolver this cluster gives workloads. bootstrap ran a
-          # dedicated ziti-workload-dns; the platform VM does not -- it answers
-          # the ziti hostnames from CoreDNS via coredns-custom rewrites, so the
-          # address to allow is kube-dns.
-          dns_service=ziti-workload-dns
-          dns_namespace=ziti
-          if ! kubectl get service "${dns_service}" -n "${dns_namespace}" >/dev/null 2>&1; then
-            dns_service=kube-dns
-            dns_namespace=kube-system
-          fi
-          echo "workload DNS: ${dns_service}.${dns_namespace}"
-          ziti_dns_ip="$(kubectl get service "${dns_service}" -n "${dns_namespace}" -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${ziti_dns_ip}" ]; then
-            echo "${dns_service} ClusterIP is empty" >&2
-            exit 1
-          fi
-          ziti_dns_endpoint_ips="$(service_endpoint_ips "${dns_service}" "${dns_namespace}")"
-          if [ -z "${ziti_dns_endpoint_ips}" ]; then
-            echo "${dns_service} endpoints are empty" >&2
-            exit 1
-          fi
-          ziti_controller_ip="$(kubectl get service ziti-controller-client -n ziti -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${ziti_controller_ip}" ]; then
-            echo "ziti-controller-client ClusterIP is empty" >&2
-            exit 1
-          fi
-          ziti_controller_endpoint_ips="$(service_endpoint_ips ziti-controller-client ziti)"
-          if [ -z "${ziti_controller_endpoint_ips}" ]; then
-            echo "ziti-controller-client endpoints are empty" >&2
-            exit 1
-          fi
-          ziti_router_ip="$(kubectl get service ziti-router-edge -n ziti -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${ziti_router_ip}" ]; then
-            echo "ziti-router-edge ClusterIP is empty" >&2
-            exit 1
-          fi
-          ziti_router_endpoint_ips="$(service_endpoint_ips ziti-router-edge ziti)"
-          if [ -z "${ziti_router_endpoint_ips}" ]; then
-            echo "ziti-router-edge endpoints are empty" >&2
-            exit 1
-          fi
-          istio_gateway_ip="$(kubectl get service istio-ingressgateway -n istio-gateway -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${istio_gateway_ip}" ]; then
-            echo "istio-ingressgateway ClusterIP is empty" >&2
-            exit 1
-          fi
-          istio_gateway_endpoint_ips="$(service_endpoint_ips istio-ingressgateway istio-gateway)"
-          if [ -z "${istio_gateway_endpoint_ips}" ]; then
-            echo "istio-ingressgateway endpoints are empty" >&2
-            exit 1
-          fi
-          agents_service_ip="$(kubectl get service agents -n platform -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${agents_service_ip}" ]; then
-            echo "agents ClusterIP is empty" >&2
-            exit 1
-          fi
-          agents_endpoint_ips="$(service_endpoint_ips agents platform)"
-          if [ -z "${agents_endpoint_ips}" ]; then
-            echo "agents endpoints are empty" >&2
-            exit 1
-          fi
-          runners_service_ip="$(kubectl get service runners -n platform -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${runners_service_ip}" ]; then
-            echo "runners ClusterIP is empty" >&2
-            exit 1
-          fi
-          runners_endpoint_ips="$(service_endpoint_ips runners platform)"
-          if [ -z "${runners_endpoint_ips}" ]; then
-            echo "runners endpoints are empty" >&2
-            exit 1
-          fi
-          apply_workload_service_alias() {
-            service_name="$1"
-            endpoint_ips="$2"
-            cat <<EOF_ALIAS_SERVICE | kubectl apply -f -
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: ${service_name}
-            namespace: agyn-workloads
-          spec:
-            ports:
-              - name: grpc
-                protocol: TCP
-                port: 50051
-                targetPort: 50051
-          EOF_ALIAS_SERVICE
-            {
-              cat <<EOF_ALIAS_SLICE
-          apiVersion: discovery.k8s.io/v1
-          kind: EndpointSlice
-          metadata:
-            name: ${service_name}-platform-source
-            namespace: agyn-workloads
-            labels:
-              kubernetes.io/service-name: ${service_name}
-          addressType: IPv4
-          ports:
-            - name: grpc
-              protocol: TCP
-              port: 50051
-          endpoints:
-          EOF_ALIAS_SLICE
-              for endpoint_ip in ${endpoint_ips}; do
-                cat <<EOF_ALIAS_SLICE
-            - addresses:
-                - ${endpoint_ip}
-              conditions:
-                ready: true
-          EOF_ALIAS_SLICE
-              done
-            } | kubectl apply -f -
-          }
-          apply_workload_service_alias agents "${agents_endpoint_ips}"
-          apply_workload_service_alias runners "${runners_endpoint_ips}"
-          agents_alias_service_ip="$(kubectl get service agents -n agyn-workloads -o jsonpath='{.spec.clusterIP}')"
-          runners_alias_service_ip="$(kubectl get service runners -n agyn-workloads -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${agents_alias_service_ip}" ] || [ -z "${runners_alias_service_ip}" ]; then
-            echo "workload namespace service alias ClusterIP is empty" >&2
-            kubectl get service -n agyn-workloads agents runners -o wide >&2 || true
-            kubectl get endpointslice -n agyn-workloads -l 'kubernetes.io/service-name in (agents,runners)' -o wide >&2 || true
-            exit 1
-          fi
-
-          add_tcp_egress_ip() {
-            patch="${patch},{\"op\":\"add\",\"path\":\"/spec/egress/-\",\"value\":{\"to\":[{\"ipBlock\":{\"cidr\":\"$1/32\"}}],\"ports\":[{\"protocol\":\"TCP\",\"port\":$2}]}}"
-          }
-
-          add_platform_backend_egress() {
-            patch="${patch},{\"op\":\"add\",\"path\":\"/spec/egress/-\",\"value\":{\"to\":[{\"namespaceSelector\":{\"matchLabels\":{\"kubernetes.io/metadata.name\":\"platform\"}},\"podSelector\":{\"matchExpressions\":[{\"key\":\"app.kubernetes.io/name\",\"operator\":\"In\",\"values\":[\"agents\",\"runners\"]}]}}],\"ports\":[{\"protocol\":\"TCP\",\"port\":50051}]}}"
-          }
-
-          patch='[{"op":"add","path":"/spec/egress/-","value":{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ziti"}},"podSelector":{"matchLabels":{"app.kubernetes.io/name":"ziti-workload-dns"}}}],"ports":[{"protocol":"UDP","port":53},{"protocol":"TCP","port":53}]}},{"op":"add","path":"/spec/egress/-","value":{"to":[{"ipBlock":{"cidr":"'"${ziti_dns_ip}"'/32"}}],"ports":[{"protocol":"UDP","port":53},{"protocol":"TCP","port":53}]}}'
-          for ziti_dns_endpoint_ip in ${ziti_dns_endpoint_ips}; do
-            patch="${patch},{\"op\":\"add\",\"path\":\"/spec/egress/-\",\"value\":{\"to\":[{\"ipBlock\":{\"cidr\":\"${ziti_dns_endpoint_ip}/32\"}}],\"ports\":[{\"protocol\":\"UDP\",\"port\":53},{\"protocol\":\"TCP\",\"port\":53}]}}"
-          done
-          add_tcp_egress_ip "${istio_gateway_ip}" 443
-          for istio_gateway_endpoint_ip in ${istio_gateway_endpoint_ips}; do
-            add_tcp_egress_ip "${istio_gateway_endpoint_ip}" 443
-          done
-          add_platform_backend_egress
-          add_tcp_egress_ip "${agents_alias_service_ip}" 50051
-          add_tcp_egress_ip "${runners_alias_service_ip}" 50051
-          add_tcp_egress_ip "${agents_service_ip}" 50051
-          for agents_endpoint_ip in ${agents_endpoint_ips}; do
-            add_tcp_egress_ip "${agents_endpoint_ip}" 50051
-          done
-          add_tcp_egress_ip "${runners_service_ip}" 50051
-          for runners_endpoint_ip in ${runners_endpoint_ips}; do
-            add_tcp_egress_ip "${runners_endpoint_ip}" 50051
-          done
-          add_tcp_egress_ip "${ziti_controller_ip}" 2496
-          for ziti_controller_endpoint_ip in ${ziti_controller_endpoint_ips}; do
-            add_tcp_egress_ip "${ziti_controller_endpoint_ip}" 2496
-            add_tcp_egress_ip "${ziti_controller_endpoint_ip}" 1280
-          done
-          add_tcp_egress_ip "${ziti_router_ip}" 2496
-          for ziti_router_endpoint_ip in ${ziti_router_endpoint_ips}; do
-            add_tcp_egress_ip "${ziti_router_endpoint_ip}" 2496
-            add_tcp_egress_ip "${ziti_router_endpoint_ip}" 3022
-          done
-          patch="${patch}]"
-
-          kubectl patch networkpolicy agent-workload-egress \
-            -n agyn-workloads \
-            --type=json \
-            -p "${patch}"
-          kubectl patch networkpolicy ziti-workload-dns \
-            -n ziti \
-            --type=json \
-            -p '[{"op":"add","path":"/spec/ingress/-","value":{"ports":[{"protocol":"UDP","port":53},{"protocol":"TCP","port":53}]}}]'
-          kubectl wait deployment/ziti-workload-dns -n ziti --for=condition=Available --timeout=180s
-          kubectl get networkpolicy agent-workload-egress -n agyn-workloads -o yaml
-          kubectl get networkpolicy ziti-workload-dns -n ziti -o yaml
-          kubectl get service -n agyn-workloads agents runners -o wide
-          kubectl get endpointslice -n agyn-workloads -l 'kubernetes.io/service-name in (agents,runners)' -o wide
-          kubectl get service,endpoints,pods -n ziti -l app.kubernetes.io/name=ziti-workload-dns -o wide
-
-      # Validation shim only: source-of-truth workload DNS belongs in the platform image.
-      # It enforces ziti.agyn.dev -> ziti-controller-client and ziti-router.agyn.dev -> ziti-router-edge.
-      - name: Patch workload Ziti DNS runtime target
-        run: |-
-          set -euo pipefail
-          current_target="$(kubectl get configmap ziti-workload-dns -n ziti -o jsonpath='{.data.ziti\.db}' | awk '$1 == "@" && $2 == "IN" && $3 == "A" {print $4; exit}')"
-          current_router_target="$(kubectl get configmap ziti-workload-dns -n ziti -o jsonpath='{.data.ziti-router\.db}' | awk '$1 == "@" && $2 == "IN" && $3 == "A" {print $4; exit}')"
-          ziti_controller_ip="$(kubectl get service ziti-controller-client -n ziti -o jsonpath='{.spec.clusterIP}')"
-          ziti_router_ip="$(kubectl get service ziti-router-edge -n ziti -o jsonpath='{.spec.clusterIP}')"
-          if [ -z "${current_target}" ]; then
-            echo "ziti-workload-dns ziti.db target is empty" >&2
-            kubectl get configmap ziti-workload-dns -n ziti -o yaml >&2 || true
-            exit 1
-          fi
-          if [ -z "${current_router_target}" ]; then
-            echo "ziti-workload-dns ziti-router.db target is empty" >&2
-            kubectl get configmap ziti-workload-dns -n ziti -o yaml >&2 || true
-            exit 1
-          fi
-          if [ -z "${ziti_controller_ip}" ]; then
-            echo "ziti-controller-client ClusterIP is empty" >&2
-            kubectl get service ziti-controller-client -n ziti -o yaml >&2 || true
-            exit 1
-          fi
-          if [ -z "${ziti_router_ip}" ]; then
-            echo "ziti-router-edge ClusterIP is empty" >&2
-            kubectl get service ziti-router-edge -n ziti -o yaml >&2 || true
-            exit 1
-          fi
-          if [ "${current_target}" != "${ziti_controller_ip}" ] || [ "${current_router_target}" != "${ziti_router_ip}" ]; then
-            echo "Patching ziti.agyn.dev workload DNS from ${current_target} to ziti-controller-client ${ziti_controller_ip} and ziti-router.agyn.dev from ${current_router_target} to ziti-router-edge ${ziti_router_ip}."
-            kubectl get configmap ziti-workload-dns -n ziti -o jsonpath='{.data.Corefile}' > /tmp/ziti-workload-Corefile
-            kubectl get configmap ziti-workload-dns -n ziti -o jsonpath='{.data.ziti\.db}' \
-              | sed -E "s/^((@|ns) IN A )[^[:space:]]+/\1${ziti_controller_ip}/" \
-              > /tmp/ziti-workload-ziti.db
-            kubectl get configmap ziti-workload-dns -n ziti -o jsonpath='{.data.ziti-router\.db}' \
-              | sed -E "s/^((@|ns) IN A )[^[:space:]]+/\1${ziti_router_ip}/" \
-              > /tmp/ziti-workload-ziti-router.db
-            kubectl create configmap ziti-workload-dns \
-              -n ziti \
-              --from-file=Corefile=/tmp/ziti-workload-Corefile \
-              --from-file=ziti.db=/tmp/ziti-workload-ziti.db \
-              --from-file=ziti-router.db=/tmp/ziti-workload-ziti-router.db \
-              --dry-run=client \
-              -o yaml | kubectl apply -f -
-            kubectl rollout restart deployment/ziti-workload-dns -n ziti
-          fi
-          kubectl rollout status deployment/ziti-workload-dns -n ziti --timeout=180s
-          kubectl get configmap ziti-workload-dns -n ziti -o yaml
+      - name: Verify disposable VM native network inventory
+        run: python3 .github/e2e/verify-vm-network.py
 
       - name: Verify workload Ziti DNS
         run: |-
@@ -1020,31 +907,30 @@ jobs:
             kubectl get pod ziti-dns-preflight -n agyn-workloads -o wide || true
             kubectl describe pod ziti-dns-preflight -n agyn-workloads || true
             kubectl logs pod/ziti-dns-preflight -n agyn-workloads --all-containers=true --tail=-1 || true
-            kubectl get configmap ziti-workload-dns -n ziti -o yaml || true
-            kubectl get service,endpoints,pods -n ziti -l app.kubernetes.io/name=ziti-workload-dns -o wide || true
-            kubectl get service,endpoints -n ziti ziti-workload-dns ziti-controller-client ziti-router-edge -o wide || true
+            kubectl get configmap coredns-custom -n kube-system -o yaml || true
+            kubectl get service,endpoints,pods -n kube-system -l k8s-app=kube-dns -o wide || true
+            kubectl get service,endpoints -n ziti ziti-controller-client ziti-router-edge -o wide || true
             kubectl get service,endpoints -n istio-gateway istio-ingressgateway -o wide || true
             kubectl get networkpolicy agent-workload-egress -n agyn-workloads -o yaml || true
-            kubectl get networkpolicy ziti-workload-dns -n ziti -o yaml || true
             kubectl get pods -n agyn-workloads -o wide || true
             kubectl logs -n agyn-workloads -l app.kubernetes.io/name=ziti-sidecar --all-containers --tail=200 || true
             kubectl logs -n agyn-workloads -l agyn.dev/component=ziti-sidecar --all-containers --tail=200 || true
           }
-          ziti_dns_ip="$(kubectl get service ziti-workload-dns -n ziti -o jsonpath='{.spec.clusterIP}')"
+          ziti_dns_ip="${WORKLOAD_TEST_DNS_SERVICE_IP:?native DNS inventory missing}"
           if [ -z "${ziti_dns_ip}" ]; then
-            echo "ziti-workload-dns ClusterIP is empty" >&2
+            echo "native workload DNS ClusterIP is empty" >&2
             dump_ziti_dns_preflight_diagnostics
             exit 1
           fi
-          ziti_dns_endpoint_ip="$(kubectl get endpoints ziti-workload-dns -n ziti -o jsonpath='{.subsets[0].addresses[0].ip}')"
+          ziti_dns_endpoint_ip="${WORKLOAD_TEST_DNS_ENDPOINT_IP:?native DNS endpoint inventory missing}"
           if [ -z "${ziti_dns_endpoint_ip}" ]; then
-            echo "ziti-workload-dns endpoint IP is empty" >&2
+            echo "native workload DNS endpoint IP is empty" >&2
             dump_ziti_dns_preflight_diagnostics
             exit 1
           fi
-          echo "ziti-workload-dns service ClusterIP: ${ziti_dns_ip}"
-          echo "ziti-workload-dns first endpoint IP: ${ziti_dns_endpoint_ip}"
-          kubectl get service,endpoints,pods -n ziti -l app.kubernetes.io/name=ziti-workload-dns -o wide
+          echo "native workload DNS service ClusterIP: ${ziti_dns_ip}"
+          echo "native workload DNS first endpoint IP: ${ziti_dns_endpoint_ip}"
+          kubectl get service,endpoints,pods -n kube-system -l k8s-app=kube-dns -o wide
           kubectl get networkpolicy agent-workload-egress -n agyn-workloads -o yaml
           kubectl delete pod ziti-dns-preflight -n agyn-workloads --ignore-not-found
           cat <<EOF_POD | kubectl apply -f -
@@ -1093,7 +979,7 @@ jobs:
                     timeout 10 nc -vz -w 5 ziti-router.agyn.dev 2496
           EOF_POD
           if ! kubectl wait pod/ziti-dns-preflight -n agyn-workloads --for=jsonpath='{.status.phase}'=Succeeded --timeout=120s; then
-            echo "ziti-workload-dns UDP/TCP 53 preflight failed from agyn-workloads" >&2
+            echo "native workload DNS UDP/TCP 53 preflight failed from agyn-workloads" >&2
             kubectl get pod ziti-dns-preflight -n agyn-workloads -o yaml >&2 || true
             kubectl logs pod/ziti-dns-preflight -n agyn-workloads >&2 || true
             dump_ziti_dns_preflight_diagnostics >&2
@@ -1105,9 +991,9 @@ jobs:
       - name: Verify workload Ziti runtime TCP
         run: |-
           set -euo pipefail
-          ziti_dns_ip="$(kubectl get service ziti-workload-dns -n ziti -o jsonpath='{.spec.clusterIP}')"
+          ziti_dns_ip="${WORKLOAD_TEST_DNS_SERVICE_IP:?native DNS inventory missing}"
           if [ -z "${ziti_dns_ip}" ]; then
-            echo "ziti-workload-dns ClusterIP is empty" >&2
+            echo "native workload DNS ClusterIP is empty" >&2
             exit 1
           fi
           kubectl delete pod ziti-runtime-preflight -n agyn-workloads --ignore-not-found
@@ -1137,7 +1023,7 @@ jobs:
             echo "ziti runtime TCP preflight failed with selector-aware controller policy present" >&2
             kubectl get networkpolicy agent-workload-egress -n agyn-workloads -o yaml >&2 || true
             kubectl get service,endpoints -n ziti ziti-controller-client -o wide >&2 || true
-            kubectl get service,endpoints,pods -n ziti -l app.kubernetes.io/name=ziti-workload-dns -o wide >&2 || true
+            kubectl get service,endpoints,pods -n kube-system -l k8s-app=kube-dns -o wide >&2 || true
             kubectl get pod ziti-runtime-preflight -n agyn-workloads -o yaml >&2 || true
             kubectl logs pod/ziti-runtime-preflight -n agyn-workloads >&2 || true
             exit 1
@@ -1148,9 +1034,9 @@ jobs:
       - name: Verify stock sidecar runtime DNS path
         run: |-
           set -euo pipefail
-          ziti_dns_ip="$(kubectl get service ziti-workload-dns -n ziti -o jsonpath='{.spec.clusterIP}')"
+          ziti_dns_ip="${WORKLOAD_TEST_DNS_SERVICE_IP:?native DNS inventory missing}"
           if [ -z "${ziti_dns_ip}" ]; then
-            echo "ziti-workload-dns ClusterIP is empty" >&2
+            echo "native workload DNS ClusterIP is empty" >&2
             exit 1
           fi
           kubectl delete pod ziti-sidecar-dns-preflight -n agyn-workloads --ignore-not-found
@@ -1195,7 +1081,7 @@ jobs:
           if ! kubectl wait pod/ziti-sidecar-dns-preflight -n agyn-workloads --for=jsonpath='{.status.phase}'=Succeeded --timeout=120s; then
             echo "stock ziti sidecar runtime DNS path failed from workload pod context" >&2
             kubectl get networkpolicy agent-workload-egress -n agyn-workloads -o yaml >&2 || true
-            kubectl get service,endpoints,pods -n ziti -l app.kubernetes.io/name=ziti-workload-dns -o wide >&2 || true
+            kubectl get service,endpoints,pods -n kube-system -l k8s-app=kube-dns -o wide >&2 || true
             kubectl get pod ziti-sidecar-dns-preflight -n agyn-workloads -o yaml >&2 || true
             kubectl logs pod/ziti-sidecar-dns-preflight -n agyn-workloads >&2 || true
             exit 1
@@ -1203,10 +1089,12 @@ jobs:
           kubectl logs pod/ziti-sidecar-dns-preflight -n agyn-workloads
           kubectl delete pod ziti-sidecar-dns-preflight -n agyn-workloads --wait=false
 
+      # spk-ai/gateway#2: /readyz is 200 only after a router confirmed the
+      # Ziti terminator, and the listening line is logged only after that.
       - name: Checkout gateway
         uses: actions/checkout@v4
         with:
-          repository: agynio/gateway
+          repository: spk-ai/gateway
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.gateway_ref || env.GATEWAY_REF }}
           path: .e2e-deps/gateway
 
@@ -1218,19 +1106,27 @@ jobs:
             selector="app.kubernetes.io/name=gateway"
             echo "== gateway source deployment diagnostics ==" >&2
             kubectl get application gateway -n argocd -o yaml >&2 || true
-            kubectl get deployment gateway -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
+            kubectl get deployment gateway -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
             echo "== gateway current logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=500 >&2 || true
             echo "== gateway previous logs ==" >&2
-            kubectl logs -n platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --previous --tail=500 >&2 || true
             echo "== platform events ==" >&2
-            kubectl get events -n platform --sort-by=.metadata.creationTimestamp >&2 || true
+            kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_gateway_source_diagnostics ERR
-          buf generate buf.build/agynio/api
+          # The pinned gateway generates from the reviewed fork API itself; fail
+          # if that pin drifts rather than building against a different contract.
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          gen = Path('buf.gen.yaml').read_text()
+          assert 'git_repo: https://github.com/spk-ai/api.git' in gen and 'ref: ce64da8680c39a13f7174c3146b38f3bfcc03037' in gen, 'pinned gateway generation contract changed'
+          assert 'buf generate --include-imports' in Path('scripts/devspace-startup.sh').read_text(), 'pinned gateway generation contract changed'
+          PYCODE
+          buf generate --include-imports
           CGO_ENABLED=0 go test ./cmd/gateway ./internal/identity ./internal/zitimgmtclient
           node <<'NODE'
           const fs = require('fs');
@@ -1268,41 +1164,22 @@ jobs:
               '      if [ "$(get_flag "watch")" == "true" ]; then',
             ].join('\n'));
           }
-          const resourcesOriginal = [
-            '                resources:',
-            '                  requests:',
-            '                    cpu: 500m',
-            '                    memory: 1Gi',
-            '                  limits:',
-            '                    cpu: "2"',
-            '                    memory: 4Gi',
-          ].join('\n');
-          const resourcesReplacement = [
-            '                resources:',
-            '                  requests:',
-            '                    cpu: 100m',
-            '                    memory: 512Mi',
-            '                  limits:',
-            '                    cpu: "1"',
-            '                    memory: 2Gi',
-          ].join('\n');
-          if (text.includes(resourcesOriginal)) {
-            text = text.replace(resourcesOriginal, resourcesReplacement);
-          } else if (!text.includes(resourcesReplacement)) {
-            throw new Error('gateway DevSpace resources block not found');
-          }
           fs.writeFileSync(path, text);
           NODE
           devspace dev
 
+      # Readiness, not log text: the Ziti SDK logs thousands of bind rejections
+      # around the listening line, and ListenWithOptions returns before any
+      # router accepts the bind.
       - name: Verify gateway Ziti service binding
+        id: gateway_ziti_ready
         run: |-
           set -euo pipefail
           selector="app.kubernetes.io/name=gateway"
           source_pod=""
           elapsed=0
           while [ "${elapsed}" -lt 180 ]; do
-            source_pod="$(kubectl get pods -n platform -l "${selector}" \
+            source_pod="$(kubectl get pods -n agyn-platform -l "${selector}" \
               -o jsonpath='{range .items[?(@.spec.containers[0].image=="ghcr.io/agynio/devcontainer-go:1.1.0")]}{.metadata.name}{"\n"}{end}' \
               | head -n 1)"
             if [ -n "${source_pod}" ]; then
@@ -1314,40 +1191,86 @@ jobs:
           if [ -z "${source_pod}" ]; then
             echo "gateway source pod not found" >&2
             kubectl get application gateway -n argocd -o yaml >&2 || true
-            kubectl get deployment gateway -n platform -o yaml >&2 || true
-            kubectl get replicasets -n platform -l "${selector}" -o wide >&2 || true
-            kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-            kubectl describe pods -n platform -l "${selector}" >&2 || true
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=500 >&2 || true
+            kubectl get deployment gateway -n agyn-platform -o yaml >&2 || true
+            kubectl get replicasets -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+            kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=500 >&2 || true
             exit 1
           fi
-          ziti_enabled="$(kubectl get deployment gateway -n platform -o jsonpath='{range .spec.template.spec.containers[*].env[?(@.name=="ZITI_ENABLED")]}{.value}{end}')"
+          ziti_enabled="$(kubectl get deployment gateway -n agyn-platform -o jsonpath='{range .spec.template.spec.containers[*].env[?(@.name=="ZITI_ENABLED")]}{.value}{end}')"
           if [ "${ziti_enabled}" != "true" ]; then
             echo "gateway source deployment is not configured with ZITI_ENABLED=true" >&2
-            kubectl get deployment gateway -n platform -o yaml >&2 || true
+            kubectl get deployment gateway -n agyn-platform -o yaml >&2 || true
             exit 1
           fi
-          attempts=0
-          while [ "${attempts}" -lt 120 ]; do
-            if kubectl logs "pod/${source_pod}" -n platform --all-containers --tail=500 2>/dev/null | grep -q 'gateway listening on ziti service gateway'; then
-              kubectl logs "pod/${source_pod}" -n platform --all-containers --tail=200
+          print_bind_summary() {
+            logs="$(mktemp)"
+            for previous in false true; do
+              kubectl logs "pod/${source_pod}" -n agyn-platform --all-containers --timestamps --previous="${previous}" \
+                2>/dev/null >>"${logs}" || true
+            done
+            echo "== gateway Ziti bind summary (${source_pod}) =="
+            echo "router rejections (identity not found by id): $(grep -c 'identity not found by id' "${logs}" || true)"
+            echo "SDK bind errors: $(grep -cE 'bind request resulted in disconnect|creating listener failed|failed to establish listener' "${logs}" || true)"
+            echo "-- first SDK bind errors --"
+            grep -E 'bind request resulted in disconnect|creating listener failed|failed to establish listener' "${logs}" | head -n 6 | cut -c1-400 || true
+            echo "-- last SDK bind errors --"
+            grep -E 'bind request resulted in disconnect|creating listener failed|failed to establish listener' "${logs}" | tail -n 6 | cut -c1-400 || true
+            echo "-- gateway Ziti manager --"
+            grep -E 'gateway listening on|ziti enrollment|re-enrolling ziti|ziti service listener|ziti lease|bind ziti service|establish ziti service listener|lost ziti service listener|failed to load platform configuration' \
+              "${logs}" | tail -n 80 | cut -c1-400 || true
+            rm -f "${logs}"
+          }
+          port_forward_log="$(mktemp)"
+          start_port_forward() {
+            kubectl port-forward -n agyn-platform "pod/${source_pod}" 18090:8080 >"${port_forward_log}" 2>&1 &
+            port_forward_pid="$!"
+          }
+          cleanup() {
+            kill "${port_forward_pid}" >/dev/null 2>&1 || true
+            wait "${port_forward_pid}" >/dev/null 2>&1 || true
+          }
+          start_port_forward
+          trap cleanup EXIT
+          started="${SECONDS}"
+          last_status=""
+          while :; do
+            status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:18090/readyz 2>/dev/null || true)"
+            if [ "${status}" = "200" ]; then
+              echo "gateway /readyz returned 200 after $((SECONDS - started))s"
+              print_bind_summary
               exit 0
             fi
-            attempts=$((attempts + 1))
-            sleep 1
+            if [ "${status}" != "${last_status}" ]; then
+              echo "gateway /readyz returned ${status:-no response} after $((SECONDS - started))s"
+              last_status="${status}"
+            fi
+            if [ "$((SECONDS - started))" -ge 240 ]; then
+              echo "gateway Ziti service listener not established within 240s (/readyz ${status:-no response})" >&2
+              cat "${port_forward_log}" >&2 || true
+              kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+              print_bind_summary >&2
+              exit 1
+            fi
+            if ! kill -0 "${port_forward_pid}" >/dev/null 2>&1; then
+              cat "${port_forward_log}" >&2 || true
+              start_port_forward
+            fi
+            sleep 2
           done
-          echo "gateway source pod did not report Ziti service listener" >&2
-          kubectl get deployment gateway -n platform -o yaml >&2 || true
-          kubectl get pods -n platform -l "${selector}" -o wide >&2 || true
-          kubectl describe pods -n platform -l "${selector}" >&2 || true
-          kubectl logs "pod/${source_pod}" -n platform --all-containers --tail=500 >&2 || true
-          exit 1
+
+      # The router-side view right after binding; the final collection may
+      # only see a data model that caught up later.
+      - name: Snapshot Ziti state after gateway binding
+        if: ${{ always() && steps.gateway_ziti_ready.outcome != 'skipped' }}
+        run: bash .github/e2e/collect-ziti-diagnostics.sh "${RUNNER_TEMP}/ziti-diagnostics/after-gateway-binding"
 
       - name: Checkout api
         uses: actions/checkout@v4
         with:
-          repository: agynio/api
-          ref: main
+          repository: spk-ai/api
+          ref: ce64da8680c39a13f7174c3146b38f3bfcc03037
           path: api
 
       - name: Checkout llm-proxy
@@ -1386,6 +1309,8 @@ jobs:
                 - require_unimplemented_servers=false
           EOF
           PATH="${protoc_bin}:${PATH}" buf generate "${proto_input}" \
+            --path "${proto_input}/agynio/api/agents/v1" \
+            --path "${proto_input}/agynio/api/notifications/v1" \
             --path "${proto_input}/agynio/api/llm/v1" \
             --path "${proto_input}/agynio/api/users/v1" \
             --path "${proto_input}/agynio/api/organizations/v1" \
@@ -1396,165 +1321,22 @@ jobs:
             --template "${proto_template}"
           gofmt -w internal/proxy/handler.go
           CGO_ENABLED=0 go test ./cmd/llm-proxy ./internal/proxy
-          node <<'NODE'
-          const fs = require('fs');
-          const path = 'devspace.yaml';
-          let text = fs.readFileSync(path, 'utf8');
-          text = text
-            .split('\n')
-            .filter((line) => line.trim() !== '- /.gen/')
-            .join('\n');
-
-          const resolveBlockMarker = 'Resolving llm-proxy deployment before source patch...';
-          if (!text.includes(resolveBlockMarker)) {
-            const marker = '    echo "Patching llm-proxy deployment for DevSpace..."';
-            if (!text.includes(marker)) {
-              throw new Error('llm-proxy DevSpace patch marker not found');
-            }
-            text = text.replace(marker, [
-              '    echo "' + resolveBlockMarker + '"',
-              '    llm_proxy_namespace="${LLM_PROXY_NAMESPACE:-platform}"',
-              '    llm_proxy_deployment="$(kubectl get deployment -n "${llm_proxy_namespace}" -l app.kubernetes.io/instance=llm-proxy -o jsonpath=\'{.items[0].metadata.name}\' 2>/dev/null || true)"',
-              '    if [ -z "${llm_proxy_deployment}" ]; then',
-              '      llm_proxy_deployment="$(kubectl get deployment -n "${llm_proxy_namespace}" -l app.kubernetes.io/name=llm-proxy -o jsonpath=\'{.items[0].metadata.name}\' 2>/dev/null || true)"',
-              '    fi',
-              '    if [ -z "${llm_proxy_deployment}" ]; then',
-              '      llm_proxy_ref="$(kubectl get deployment -A -l app.kubernetes.io/instance=llm-proxy -o jsonpath=\'{range .items[0]}{.metadata.namespace}{"\\t"}{.metadata.name}{end}\' 2>/dev/null || true)"',
-              '      if [ -z "${llm_proxy_ref}" ]; then',
-              '        llm_proxy_ref="$(kubectl get deployment -A -l app.kubernetes.io/name=llm-proxy -o jsonpath=\'{range .items[0]}{.metadata.namespace}{"\\t"}{.metadata.name}{end}\' 2>/dev/null || true)"',
-              '      fi',
-              '      if [ -n "${llm_proxy_ref}" ]; then',
-              '        llm_proxy_namespace="$(printf \'%s\' "${llm_proxy_ref}" | awk \'{ print $1 }\')"',
-              '        llm_proxy_deployment="$(printf \'%s\' "${llm_proxy_ref}" | awk \'{ print $2 }\')"',
-              '      fi',
-              '    fi',
-              '    if [ -z "${llm_proxy_deployment}" ]; then',
-              '      echo "llm-proxy deployment not found in namespace ${llm_proxy_namespace}" >&2',
-              '      kubectl get deployments -A -o wide >&2 || true',
-              '      exit 1',
-              '    fi',
-              '    label_selector="app.kubernetes.io/name=llm-proxy"',
-              '    echo "Scaling ${llm_proxy_namespace}/${llm_proxy_deployment} down before source patch..."',
-              '    kubectl scale "deployment/${llm_proxy_deployment}" -n "${llm_proxy_namespace}" --replicas=0',
-              '    if [ -n "$(kubectl get pods -n "${llm_proxy_namespace}" -l "${label_selector}" -o name)" ]; then',
-              '      kubectl wait --for=delete pod -n "${llm_proxy_namespace}" -l "${label_selector}" --timeout=240s',
-              '    fi',
-              marker,
-            ].join('\n'));
-          }
-
-          const strategicOriginal = 'kubectl patch deployment llm-proxy-llm-proxy -n ${LLM_PROXY_NAMESPACE} --type strategic --patch';
-          const strategicReplacement = 'kubectl patch "deployment/${llm_proxy_deployment}" -n "${llm_proxy_namespace}" --type strategic --patch';
-          if (text.includes(strategicOriginal)) {
-            text = text.replace(strategicOriginal, strategicReplacement);
-          } else if (!text.includes(strategicReplacement)) {
-            throw new Error('llm-proxy strategic patch target not found');
-          }
-
-          const probeMarker = '              livenessProbe: null';
-          if (!text.includes(probeMarker)) {
-            const workingDir = '              workingDir: /opt/app/data';
-            if (!text.includes(workingDir)) {
-              throw new Error('llm-proxy DevSpace workingDir not found');
-            }
-            text = text.replace(workingDir, [
-              '              readinessProbe: null',
-              '              livenessProbe: null',
-              '              startupProbe: null',
-              workingDir,
-            ].join('\n'));
-          }
-
-          const commandOriginal = [
-            '                  set -eu',
-            '                  elapsed=0',
-            '                  while [ ! -f /opt/app/data/go.mod ]; do',
-            '                    sleep 1; elapsed=$((elapsed + 1))',
-            '                    [ "$elapsed" -ge 120 ] && { echo "ERROR: sync timeout" >&2; exit 1; }',
-            '                  done',
-            '                  buf generate buf.build/agynio/api \\',
-            '                    --path agynio/api/llm/v1 \\',
-            '                    --path agynio/api/users/v1 \\',
-            '                    --path agynio/api/organizations/v1 \\',
-            '                    --path agynio/api/authorization/v1 \\',
-            '                    --path agynio/api/metering/v1 \\',
-            '                    --path agynio/api/ziti_management/v1 \\',
-            '                    --path agynio/api/identity/v1',
-            '                  exec go run ./cmd/llm-proxy',
-          ].join('\n');
-          const commandReplacement = [
-            '                  set -eu',
-            '                  echo "llm-proxy source container waiting for DevSpace sync..."',
-            '                  start=$(date +%s)',
-            '                  required_files="go.mod go.sum buf.gen.yaml buf.yaml cmd/llm-proxy/main.go internal/config/config.go internal/proxy/handler.go"',
-            '                  for source_file in ${required_files}; do',
-            '                    while [ ! -f "/opt/app/data/${source_file}" ]; do',
-            '                      sleep 1',
-            '                      elapsed=$(( $(date +%s) - start ))',
-            '                      [ "$elapsed" -ge 300 ] && { echo "ERROR: sync timeout waiting for ${source_file}" >&2; find /opt/app/data -maxdepth 3 -type f | sort >&2 || true; exit 1; }',
-            '                    done',
-            '                  done',
-            '                  while [ ! -f /opt/app/data/.gen/go/agynio/api/llm/v1/llm.pb.go ]; do',
-            '                    sleep 1',
-            '                    elapsed=$(( $(date +%s) - start ))',
-            '                    [ "$elapsed" -ge 300 ] && { echo "ERROR: sync timeout waiting for generated api" >&2; find /opt/app/data/.gen -maxdepth 5 -type f | sort >&2 || true; exit 1; }',
-            '                  done',
-            '                  echo "llm-proxy generated api synced; starting source server..."',
-            '                  exec go run ./cmd/llm-proxy',
-          ].join('\n');
-          if (text.includes(commandOriginal)) {
-            text = text.replace(commandOriginal, commandReplacement);
-          } else if (!text.includes(commandReplacement)) {
-            throw new Error('llm-proxy DevSpace startup command not found');
-          }
-
-          const rolloutNeedle = [
-            '    )"',
-            '  patch_agents_orchestrator: |-',
-          ].join('\n');
-          const rolloutMarker = 'rollout status "deployment/${llm_proxy_deployment}"';
-          if (!text.includes(rolloutMarker)) {
-            if (!text.includes(rolloutNeedle)) {
-              throw new Error('llm-proxy DevSpace rollout marker not found');
-            }
-            text = text.replace(rolloutNeedle, [
-              '    )"',
-              '    recreate_patch="$(cat <<\'EOF\'',
-              '    {"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}',
-              '    EOF',
-              '    )"',
-              '    kubectl patch "deployment/${llm_proxy_deployment}" -n "${llm_proxy_namespace}" --type merge -p "${recreate_patch}"',
-              '    kubectl scale "deployment/${llm_proxy_deployment}" -n "${llm_proxy_namespace}" --replicas=1',
-              '    kubectl rollout status "deployment/${llm_proxy_deployment}" -n "${llm_proxy_namespace}" --timeout=240s',
-              '  patch_agents_orchestrator: |-',
-            ].join('\n'));
-          }
-
-          const resourcesOriginal = [
-            '              resources:',
-            '                requests:',
-            '                  cpu: 500m',
-            '                  memory: 1Gi',
-            '                limits:',
-            '                  cpu: "2"',
-            '                  memory: 4Gi',
-          ].join('\n');
-          const resourcesReplacement = [
-            '              resources:',
-            '                requests:',
-            '                  cpu: 100m',
-            '                  memory: 512Mi',
-            '                limits:',
-            '                  cpu: "1"',
-            '                  memory: 2Gi',
-          ].join('\n');
-          if (text.includes(resourcesOriginal)) {
-            text = text.replace(resourcesOriginal, resourcesReplacement);
-          } else if (!text.includes(resourcesReplacement)) {
-            throw new Error('llm-proxy DevSpace resources block not found');
-          }
-          fs.writeFileSync(path, text);
-          NODE
+          mkdir -p dist
+          CGO_ENABLED=0 go build -o dist/llm-proxy-devspace ./cmd/llm-proxy
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import re
+          p = Path('devspace.yaml')
+          s = p.read_text()
+          pattern = r'                  set -eu\n.*?                  exec go run ./cmd/llm-proxy'
+          replacement = '                  set -eu\n                  elapsed=0\n                  while [ ! -x /opt/app/data/dist/llm-proxy-devspace ]; do\n                    sleep 1; elapsed=$((elapsed + 1))\n                    [ "$elapsed" -ge 300 ] && { echo "ERROR: source binary sync timeout" >&2; exit 1; }\n                  done\n                  exec /opt/app/data/dist/llm-proxy-devspace'
+          s, count = re.subn(pattern, lambda _: replacement, s, flags=re.S)
+          assert count == 1, 'pinned llm-proxy startup contract changed'
+          p.write_text(s)
+          PYCODE
+          deployment="$(kubectl get deployment -n agyn-platform -l app.kubernetes.io/name=llm-proxy -o jsonpath='{.items[0].metadata.name}')"
+          test -n "${deployment}"
+          kubectl patch deployment "${deployment}" -n agyn-platform --type merge -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
           devspace dev
       # Validation only: llm-proxy Ziti binding is configured by the platform image.
       - name: Verify llm-proxy Ziti service binding
@@ -1580,29 +1362,33 @@ jobs:
             kubectl get application "$app" -n argocd -o yaml >&2 || true
           }
           wait_argocd_app_sync_finished llm-proxy
-          deployment="$(kubectl get deployment -n platform -l app.kubernetes.io/instance=llm-proxy -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+          deployment="$(kubectl get deployment -n agyn-platform -l app.kubernetes.io/instance=llm-proxy -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
           if [ -z "${deployment}" ]; then
-            deployment="$(kubectl get deployment -n platform -l app.kubernetes.io/name=llm-proxy -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+            deployment="$(kubectl get deployment -n agyn-platform -l app.kubernetes.io/name=llm-proxy -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
           fi
           if [ -z "${deployment}" ]; then
             echo "llm-proxy deployment not found" >&2
             kubectl get application llm-proxy -n argocd -o yaml >&2 || true
-            kubectl get deployments -n platform -o wide >&2 || true
+            kubectl get deployments -n agyn-platform -o wide >&2 || true
             exit 1
           fi
-          kubectl rollout status "deployment/${deployment}" -n platform --timeout=240s
-          ziti_enabled_values="$(kubectl get "deployment/${deployment}" -n platform -o jsonpath='{range .spec.template.spec.containers[*].env[?(@.name=="ZITI_ENABLED")]}{.value}{"\n"}{end}')"
+          kubectl rollout status "deployment/${deployment}" -n agyn-platform --timeout=240s
+          ziti_enabled_values="$(kubectl get "deployment/${deployment}" -n agyn-platform -o jsonpath='{range .spec.template.spec.containers[*].env[?(@.name=="ZITI_ENABLED")]}{.value}{"\n"}{end}')"
           ziti_enabled="$(printf '%s\n' "${ziti_enabled_values}" | awk 'NF { value=$0 } END { print value }')"
           if [ "${ziti_enabled}" != "true" ]; then
             echo "llm-proxy deployment is not source-of-truth configured with ZITI_ENABLED=true" >&2
             kubectl get application llm-proxy -n argocd -o yaml >&2 || true
-            kubectl get "deployment/${deployment}" -n platform -o yaml >&2 || true
+            kubectl get "deployment/${deployment}" -n agyn-platform -o yaml >&2 || true
             exit 1
           fi
           attempts=0
           while [ "${attempts}" -lt 120 ]; do
-            if kubectl logs "deployment/${deployment}" -n platform --all-containers --tail=500 2>/dev/null | grep -q 'llm-proxy listening on ziti service llm-proxy'; then
-              kubectl logs "deployment/${deployment}" -n platform --all-containers --tail=200
+            # The whole log, saved first so an early grep exit cannot SIGPIPE
+            # kubectl under pipefail: while the router's data model lags a new
+            # identity, SDK bind retries can bury the line under any fixed tail.
+            kubectl logs "deployment/${deployment}" -n agyn-platform --all-containers --tail=-1 >"${RUNNER_TEMP}/llm-proxy.log" 2>/dev/null || true
+            if grep -q 'llm-proxy listening on ziti service llm-proxy' "${RUNNER_TEMP}/llm-proxy.log"; then
+              kubectl logs "deployment/${deployment}" -n agyn-platform --all-containers --tail=200
               exit 0
             fi
             attempts=$((attempts + 1))
@@ -1610,42 +1396,21 @@ jobs:
           done
           echo "llm-proxy did not report Ziti service listener from the source-of-truth deployment" >&2
           kubectl get application llm-proxy -n argocd -o yaml >&2 || true
-          kubectl get "deployment/${deployment}" -n platform -o yaml >&2 || true
-          kubectl get pods -n platform -l app.kubernetes.io/instance=llm-proxy -o wide >&2 || true
-          kubectl get pods -n platform -l app.kubernetes.io/name=llm-proxy -o wide >&2 || true
-          kubectl logs "deployment/${deployment}" -n platform --all-containers --tail=500 >&2 || true
+          kubectl get "deployment/${deployment}" -n agyn-platform -o yaml >&2 || true
+          kubectl get pods -n agyn-platform -l app.kubernetes.io/instance=llm-proxy -o wide >&2 || true
+          kubectl get pods -n agyn-platform -l app.kubernetes.io/name=llm-proxy -o wide >&2 || true
+          kubectl logs "deployment/${deployment}" -n agyn-platform --all-containers --tail=500 >&2 || true
           exit 1
       - name: Deploy orchestrator from source
+        id: orchestrator_deploy
         run: devspace run deploy
 
       - name: Checkout e2e
         uses: actions/checkout@v4
         with:
           repository: agynio/e2e
-          ref: main
+          ref: 435b549a937129b6858e7314648eb690894209fe
           path: e2e
-
-      - name: Patch E2E default model endpoint
-        run: |-
-          set -euo pipefail
-          node <<'NODE'
-          const fs = require('fs');
-          const path = 'e2e/.github/actions/run-tests/action.yml';
-          let text = fs.readFileSync(path, 'utf8');
-          const endpointOriginal = '"endpoint":"https://llm.e2e.agyn.dev/${now}"';
-          const endpointReplacement = '"endpoint":"https://testllm.dev/v1/org/agynio/suite/codex/responses"';
-          const modelOriginal = '"remoteName":"gpt-4o-mini"';
-          const modelReplacement = '"remoteName":"simple-hello"';
-          if (!text.includes(endpointOriginal)) {
-            throw new Error('default E2E LLM provider endpoint block not found');
-          }
-          if (!text.includes(modelOriginal)) {
-            throw new Error('default E2E model remoteName block not found');
-          }
-          text = text.replace(endpointOriginal, endpointReplacement);
-          text = text.replace(modelOriginal, modelReplacement);
-          fs.writeFileSync(path, text);
-          NODE
 
       - name: Checkout OpenTelemetry proto
         uses: actions/checkout@v4
@@ -1659,6 +1424,8 @@ jobs:
         run: |-
           set -euo pipefail
           node ../.github/scripts/patch-e2e-agent-instances.js
+          python3 ../.e2e-deps/k8s-runner/.github/e2e/patch-native-client.py .
+          cp ../.github/e2e/gateway_ziti_probe_test.go.txt suites/go-core/tests/gateway_ziti_probe_test.go
           cd suites/go-core
 
           protoc_bin="${RUNNER_TEMP}/go-core-protoc-gen"
@@ -1704,6 +1471,7 @@ jobs:
             --path "${proto_input}/agynio/api/gateway/v1/llm.proto" \
             --path "${proto_input}/agynio/api/gateway/v1/users.proto" \
             --path "${proto_input}/agynio/api/identity/v1" \
+            --path "${proto_input}/agynio/api/images/v1" \
             --path "${proto_input}/agynio/api/llm/v1" \
             --path "${proto_input}/agynio/api/metering/v1" \
             --path "${proto_input}/agynio/api/organizations/v1" \
@@ -1720,15 +1488,34 @@ jobs:
             --template "${proto_template}"
           gofmt -w tests/*.go
           find .gen/go -type f -name '*.go' -print0 | xargs -0 gofmt -w
+          # The probe enrolls through ziti/enroll, which imports gabs; the
+          # pinned suite's go.sum does not list it.
+          go get github.com/Jeffail/gabs@v1.4.0
           CGO_ENABLED=0 go test -tags 'e2e svc_agents_orchestrator' ./tests -run TestNonExistent -count=1
+
+      # Dials the Gateway's own Ziti terminator as a synthetic agent before the
+      # long acceptance runs depend on it.
+      - name: Probe gateway over native Ziti transport
+        uses: ./e2e/.github/actions/run-tests
+        env:
+          E2E_SUITES: go-core
+          E2E_GO_TEST_RUN: "^TestGatewayZitiNativeTransport$"
+          E2E_SKIP_BUF_GENERATE: "true"
+          E2E_ARTIFACT_NAME_SUFFIX: "-gateway-ziti-probe"
+        with:
+          e2e-ref: 435b549a937129b6858e7314648eb690894209fe
+          service: agents_orchestrator
+          include_smoke: "false"
 
       - name: Run focused go-core acceptance tests
         uses: ./e2e/.github/actions/run-tests
         env:
           E2E_SUITES: go-core
+          E2E_ARTIFACT_NAME_SUFFIX: "-focused"
           E2E_GO_TEST_RUN: "TestAgentAgynCLIWaitToAnotherAgent|TestMCPToolsE2E|TestWorkloadStartRetryPolicyFastRetry"
           E2E_SKIP_BUF_GENERATE: "true"
         with:
+          e2e-ref: 435b549a937129b6858e7314648eb690894209fe
           service: agents_orchestrator
           include_smoke: "false"
 
@@ -1737,7 +1524,9 @@ jobs:
         env:
           E2E_SUITES: go-core playwright-chat-app
           E2E_SKIP_BUF_GENERATE: "true"
+          E2E_ARTIFACT_NAME_SUFFIX: "-full"
         with:
+          e2e-ref: 435b549a937129b6858e7314648eb690894209fe
           service: agents_orchestrator
           include_smoke: "false"
 
@@ -1749,19 +1538,25 @@ jobs:
           for app in runners agents-orchestrator k8s-runner agents authorization identity threads expose gateway llm-proxy; do
             selector="app.kubernetes.io/name=${app}"
             echo "== ${app} deployment =="
-            kubectl get deployment "${app}" -n platform -o yaml || kubectl get deployment "${app}-${app}" -n platform -o yaml || true
+            kubectl get deployment "${app}" -n agyn-platform -o yaml || kubectl get deployment "${app}-${app}" -n agyn-platform -o yaml || true
             echo "== ${app} pods =="
-            kubectl get pods -n platform -l "${selector}" -o wide || true
+            kubectl get pods -n agyn-platform -l "${selector}" -o wide || true
             echo "== ${app} describe =="
-            kubectl describe pods -n platform -l "${selector}" || true
+            kubectl describe pods -n agyn-platform -l "${selector}" || true
             echo "== ${app} logs =="
-            kubectl logs -n platform -l "${selector}" --all-containers --tail=300 || true
+            kubectl logs -n agyn-platform -l "${selector}" --all-containers --tail=300 || true
           done
           echo "== platform events =="
-          kubectl get events -n platform --sort-by=.metadata.creationTimestamp || true
+          kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp || true
           echo "== workload pods =="
           kubectl get pods -n agyn-workloads -o wide || true
           kubectl describe pods -n agyn-workloads || true
+          # Removed workloads leave only events: scheduling, OOM and pull
+          # history of every attempt, and the node's committed requests.
+          echo "== workload events =="
+          kubectl get events -n agyn-workloads --sort-by=.lastTimestamp || true
+          echo "== node allocation =="
+          kubectl describe nodes || true
           echo "== workload logs =="
           for pod in $(kubectl get pods -n agyn-workloads -o name 2>/dev/null || true); do
             echo "== ${pod} current logs =="
@@ -1773,61 +1568,30 @@ jobs:
             kubectl logs -n agyn-workloads "${pod}" --all-containers --previous --tail=500 --prefix=true || true
           done
 
-      - name: Restore authorization ArgoCD sync
+      # Evidence for the orchestrator's idle collection of the workloads it
+      # starts; the final Ziti snapshot below lists identities after this wait.
+      # It follows the failure dump, which must describe failing workloads
+      # before idle collection can remove them during this wait.
+      - name: Report orchestrator workload cleanup
+        if: ${{ always() && steps.orchestrator_deploy.outcome == 'success' }}
+        run: python3 .github/e2e/report-workload-cleanup.py
+
+      - name: Collect sanitized Ziti diagnostics
         if: always()
-        run: |-
-          if kubectl get application authorization -n argocd >/dev/null 2>&1; then
-            kubectl patch application authorization -n argocd \
-              --type merge \
-              -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
-          fi
+        run: bash .github/e2e/collect-ziti-diagnostics.sh "${RUNNER_TEMP}/ziti-diagnostics/final"
 
-      - name: Restore agents ArgoCD sync
-        if: ${{ always() && hashFiles('.e2e-deps/agents/devspace.yaml') != '' }}
-        run: |-
-          if kubectl get application agents -n argocd >/dev/null 2>&1; then
-            kubectl patch application agents -n argocd \
-              --type merge \
-              -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
-          fi
-
-      - name: Restore threads ArgoCD sync
-        if: ${{ always() && hashFiles('.e2e-deps/threads/devspace.yaml') != '' }}
-        run: |-
-          if kubectl get application threads -n argocd >/dev/null 2>&1; then
-            kubectl patch application threads -n argocd \
-              --type merge \
-              -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
-          fi
-
-      - name: Restore identity ArgoCD sync
-        if: ${{ always() && hashFiles('.e2e-deps/identity/devspace.yaml') != '' }}
-        run: |-
-          if kubectl get application identity -n argocd >/dev/null 2>&1; then
-            kubectl patch application identity -n argocd \
-              --type merge \
-              -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
-          fi
-
-      - name: Restore expose ArgoCD sync
-        if: ${{ always() && hashFiles('.e2e-deps/expose/Dockerfile') != '' }}
-        run: |-
-          if kubectl get application expose -n argocd >/dev/null 2>&1; then
-            kubectl patch application expose -n argocd \
-              --type merge \
-              -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
-          fi
-
-      - name: Restore runners ArgoCD sync
-        if: ${{ always() && hashFiles('.e2e-deps/runners/devspace.yaml') != '' }}
-        working-directory: .e2e-deps/runners
-        run: devspace run-pipeline restore-argocd
-
-      - name: Restore k8s-runner ArgoCD sync
-        if: ${{ always() && hashFiles('.e2e-deps/k8s-runner/devspace.yaml') != '' }}
-        working-directory: .e2e-deps/k8s-runner
-        run: devspace run restore-argocd
-
-      - name: Restore ArgoCD sync
+      - name: Upload sanitized Ziti diagnostics
         if: always()
-        run: devspace run restore-argocd
+        uses: actions/upload-artifact@v4
+        with:
+          name: ziti-diagnostics
+          path: ${{ runner.temp }}/ziti-diagnostics/
+          if-no-files-found: warn
+
+      # Provisioning uses a disposable Helm-owned VM, with no ArgoCD apps.
+      - name: Stop disposable platform VM
+        if: always()
+        run: |
+          if command -v agyn >/dev/null 2>&1; then
+            agyn local stop
+          fi
