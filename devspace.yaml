@@ -69,6 +69,10 @@ functions:
                   value: "__EGRESS_CA_NAMESPACE__"
                 - name: ZITI_SIDECAR_IMAGE
                   value: "openziti/ziti-tunnel:2.0.0-pre10"
+                - name: WORKLOAD_NETWORK_MODE
+                  value: "__WORKLOAD_NETWORK_MODE__"
+                - name: WORKLOAD_PROXY_IMAGE
+                  value: "__WORKLOAD_PROXY_IMAGE__"
                 - name: ZITI_ENROLLMENT_CONTROLLER_RESOLVE_HOST
                   value: "__ZITI_ENROLLMENT_CONTROLLER_RESOLVE_HOST__"
                 - name: ZITI_ENROLLMENT_CONTROLLER_PORT
@@ -151,6 +155,8 @@ functions:
     patch="${patch/__ZITI_RUNTIME_CONTROLLER_PORT__/${ZITI_RUNTIME_CONTROLLER_PORT:-}}"
     patch="${patch/__AGYND_AGENTS_DIRECT_ADDRESS__/${AGYND_AGENTS_DIRECT_ADDRESS:-}}"
     patch="${patch/__AGYND_RUNNERS_DIRECT_ADDRESS__/${AGYND_RUNNERS_DIRECT_ADDRESS:-}}"
+    patch="${patch/__WORKLOAD_NETWORK_MODE__/${WORKLOAD_NETWORK_MODE:-tproxy}}"
+    patch="${patch/__WORKLOAD_PROXY_IMAGE__/${WORKLOAD_PROXY_IMAGE:-}}"
     kubectl patch deployment agents-orchestrator -n ${ORCHESTRATOR_NAMESPACE} --type strategic --patch "${patch}"
   wait_for_orchestrator: |-
     echo "Waiting for orchestrator deployment to roll out..."

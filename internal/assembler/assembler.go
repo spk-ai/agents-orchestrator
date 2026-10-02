@@ -546,6 +546,9 @@ func (a *Assembler) Assemble(ctx context.Context, agentID, agentInstanceID, thre
 	}
 	// Layered last so a user-set ENV cannot shadow the placeholder or the mode.
 	mainEnv = mergeEnvVars(append(llmMode.EnvVars, mainEnv...), nil, "llm mode")
+	if a.explicitProxy() {
+		mainEnv = applyExplicitProxyEnv(mainEnv, agynHomeMountPath, fmt.Sprintf("agent %s", agentID))
+	}
 
 	mainMounts := append([]*runnerv1.VolumeMount{}, agentMounts...)
 	mainMounts = append(mainMounts, &runnerv1.VolumeMount{Volume: agynBinVolumeName, MountPath: agynBinMountPath})
@@ -570,56 +573,13 @@ func (a *Assembler) Assemble(ctx context.Context, agentID, agentInstanceID, thre
 		return nil, fmt.Errorf("agent %s: environment names no agent runtime image", agentID)
 	}
 	initContainers = append(initContainers, runtimeInit)
-	if a.cfg.ZitiEnabled {
-		if _, err := gatewayHost(a.cfg.AgentGatewayAddress); err != nil {
-			return nil, err
-		}
-		llmProxyTarget, err := zitiServiceWaitTarget(a.cfg.AgentLLMBaseURL)
-		if err != nil {
-			return nil, err
-		}
-		zitiEnroll := &runnerv1.ContainerSpec{
-			Image:      a.cfg.ZitiSidecarImage,
-			Name:       ZitiEnrollContainerName,
-			Cmd:        buildZitiEnrollCommand(a.cfg.ZitiEnrollmentDNSUpstream, a.cfg.ZitiEnrollmentControllerResolveHost, a.cfg.ZitiEnrollmentControllerPort, a.cfg.ZitiRuntimeControllerResolveHost, a.cfg.ZitiRuntimeControllerPort),
-			Entrypoint: zitiEnrollEntrypoint,
-			Env:        zitiEnrollEnvVars(a.cfg.ZitiEnrollmentControllerResolveHost, a.cfg.ZitiEnrollmentControllerPort),
-			Mounts:     []*runnerv1.VolumeMount{{Volume: zitiIdentityVolumeName, MountPath: zitiIdentityMountPath}},
-		}
-		zitiSidecar := &runnerv1.ContainerSpec{
-			Image:                a.cfg.ZitiSidecarImage,
-			Name:                 ZitiSidecarContainerName,
-			Cmd:                  buildZitiSidecarCommand(a.cfg.WorkloadDNSUpstream),
-			Entrypoint:           zitiSidecarEntrypoint,
-			Env:                  zitiSidecarEnvVars(a.cfg.WorkloadDNSUpstream),
-			Mounts:               []*runnerv1.VolumeMount{{Volume: zitiIdentityVolumeName, MountPath: zitiIdentityMountPath}},
-			RequiredCapabilities: []string{zitiRequiredCapabilityNetAdmin},
-			// k8s-runner maps restart_policy=Always on init containers to
-			// Kubernetes restartable init containers. This lets the tunnel stay
-			// up while Kubernetes continues to later init containers and main.
-			AdditionalProperties: map[string]string{zitiRestartPolicyKey: zitiRestartPolicyAlways},
-		}
-		zitiWait := &runnerv1.ContainerSpec{
-			Image:      a.cfg.ZitiSidecarImage,
-			Name:       zitiWaitContainerName,
-			Entrypoint: zitiSidecarEntrypoint,
-			Cmd:        buildZitiWaitCommand(a.cfg.AgentGatewayAddress, llmProxyTarget),
-		}
-		applyEgressCA(zitiEnroll, a.egressCACert)
-		applyEgressCA(zitiSidecar, a.egressCACert)
-		applyEgressCA(zitiWait, a.egressCACert)
-		// The binaries land while the overlay is coming up, not after it.
-		//
-		// Kubernetes runs blocking init containers one at a time, so ordering is
-		// the whole lever here. The agyn-bin containers only unload binaries into
-		// a shared volume -- they need no mesh and no network -- and putting them
-		// behind the wait meant their seconds were spent after the tunnel was
-		// already up rather than during. The wait goes last, by which time it
-		// usually has nothing left to wait for.
-		initContainers = append(
-			append([]*runnerv1.ContainerSpec{zitiEnroll, zitiSidecar}, initContainers...),
-			zitiWait,
-		)
+	overlay, err := a.overlay()
+	if err != nil {
+		return nil, err
+	}
+	initContainers = overlay.withInit(initContainers)
+	if overlay != nil {
+		main.Mounts = append(main.Mounts, overlay.mainMounts...)
 	}
 
 	mcps, err := a.listMcps(ctx, agentID)
@@ -676,11 +636,8 @@ func (a *Assembler) Assemble(ctx context.Context, agentID, agentInstanceID, thre
 		Kind: runnerv1.VolumeKind_VOLUME_KIND_EPHEMERAL,
 	}
 	volumes := append(volumeResolver.Specs(), agynBinVolume)
-	if a.cfg.ZitiEnabled {
-		volumes = append(volumes, &runnerv1.VolumeSpec{
-			Name: zitiIdentityVolumeName,
-			Kind: runnerv1.VolumeKind_VOLUME_KIND_EPHEMERAL,
-		})
+	if overlay != nil {
+		volumes = append(volumes, overlay.volumes...)
 	}
 	sort.Slice(volumes, func(i, j int) bool { return volumes[i].Name < volumes[j].Name })
 
@@ -699,13 +656,8 @@ func (a *Assembler) Assemble(ctx context.Context, agentID, agentInstanceID, thre
 			LabelKeyPrefix + LabelThreadID:   threadID.String(),
 		},
 	}
-	if a.cfg.ZitiEnabled {
-		// Parallel resolvers (including musl) can bypass interception if an
-		// ordinary nameserver is listed here. The tunnel forwards other names.
-		request.DnsConfig = &runnerv1.DnsConfig{
-			Nameservers: []string{zitiDNSNameserver},
-			Searches:    []string{zitiDNSSearchService, zitiDNSSearchCluster},
-		}
+	if overlay != nil {
+		request.DnsConfig = overlay.dnsConfig
 	}
 	persistentVolumes, err := volumeResolver.PersistentVolumes()
 	if err != nil {
@@ -931,14 +883,17 @@ func (a *Assembler) buildMcpSidecar(ctx context.Context, resolver *envResolver, 
 	if err != nil {
 		return nil, err
 	}
-	gatewayURL := buildGatewayURL(a.cfg.AgentGatewayAddress)
+	endpoints := a.workloadEndpoints()
 	envVars = mergeEnvVars([]*runnerv1.EnvVar{
 		{Name: "MCP_PORT", Value: strconv.Itoa(port)},
-		{Name: "GATEWAY_ADDRESS", Value: a.cfg.AgentGatewayAddress},
-		{Name: "AGYN_GATEWAY_URL", Value: gatewayURL},
+		{Name: "GATEWAY_ADDRESS", Value: endpoints.gateway},
+		{Name: "AGYN_GATEWAY_URL", Value: endpoints.gatewayURL},
 	}, envVars, fmt.Sprintf("mcp %s", mcpID.String()))
 	envVars = applyMcpResolverEnvVars(envVars)
 	envVars = appendEgressCAEnvVars(envVars)
+	if a.explicitProxy() {
+		envVars = applyExplicitProxyEnv(envVars, mcpDefaultHome, fmt.Sprintf("mcp %s", mcpID.String()))
+	}
 
 	image := mcp.GetImage()
 	if rewriter.enabled() && mcp.GetImageId() != "" {
@@ -1124,7 +1079,7 @@ func appendPlatformEnvVar(envs []*runnerv1.EnvVar, env *runnerv1.EnvVar) []*runn
 // there is no one thread to name at startup. Pinning it here would scope the
 // daemon to whichever thread happened to be first unacked when it launched.
 func (a *Assembler) baseAgentEnvVars(agent *agentsv1.Agent, agentID, agentInstanceID uuid.UUID) []*runnerv1.EnvVar {
-	gatewayURL := buildGatewayURL(a.cfg.AgentGatewayAddress)
+	endpoints := a.workloadEndpoints()
 	vars := []*runnerv1.EnvVar{
 		{Name: "AGENT_INSTANCE_ID", Value: agentInstanceID.String()},
 		{Name: "AGENT_ID", Value: agentID.String()},
@@ -1135,9 +1090,9 @@ func (a *Assembler) baseAgentEnvVars(agent *agentsv1.Agent, agentID, agentInstan
 		{Name: "AGENT_CONFIG", Value: agent.GetConfiguration()},
 		{Name: "AGYN_ORGANIZATION_ID", Value: agent.GetOrganizationId()},
 		{Name: "AGYN_IDENTITY_ID", Value: agentInstanceID.String()},
-		{Name: "GATEWAY_ADDRESS", Value: a.cfg.AgentGatewayAddress},
-		{Name: "AGYN_GATEWAY_URL", Value: gatewayURL},
-		{Name: "LLM_BASE_URL", Value: a.cfg.AgentLLMBaseURL},
+		{Name: "GATEWAY_ADDRESS", Value: endpoints.gateway},
+		{Name: "AGYN_GATEWAY_URL", Value: endpoints.gatewayURL},
+		{Name: "LLM_BASE_URL", Value: endpoints.llmBaseURL},
 	}
 	if a.cfg.AgyndAgentsDirectAddress != "" {
 		vars = append(vars, &runnerv1.EnvVar{Name: "AGYND_AGENTS_DIRECT_ADDRESS", Value: a.cfg.AgyndAgentsDirectAddress})
@@ -1145,13 +1100,13 @@ func (a *Assembler) baseAgentEnvVars(agent *agentsv1.Agent, agentID, agentInstan
 	if a.cfg.AgyndRunnersDirectAddress != "" {
 		vars = append(vars, &runnerv1.EnvVar{Name: "AGYND_RUNNERS_DIRECT_ADDRESS", Value: a.cfg.AgyndRunnersDirectAddress})
 	}
-	if a.cfg.AgentTracingAddress != "" {
-		vars = append(vars, &runnerv1.EnvVar{Name: "TRACING_ADDRESS", Value: a.cfg.AgentTracingAddress})
+	if endpoints.tracing != "" {
+		vars = append(vars, &runnerv1.EnvVar{Name: "TRACING_ADDRESS", Value: endpoints.tracing})
 		// The same address, for anything in the workload that exports OTLP on
 		// its own rather than through agynd. It named a collector sidecar that
 		// no longer runs -- spans were sent to a closed port and the export
 		// blocked the turn that produced them.
-		vars = append(vars, &runnerv1.EnvVar{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: "http://" + a.cfg.AgentTracingAddress})
+		vars = append(vars, &runnerv1.EnvVar{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: "http://" + endpoints.tracing})
 	}
 	return vars
 }

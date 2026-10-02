@@ -123,6 +123,9 @@ func (a *Assembler) AssembleSandbox(ctx context.Context, sandbox *agentsv1.Sandb
 		return nil, err
 	}
 	mainEnv = mergeEnvVars(append(llmMode.EnvVars, mainEnv...), nil, "llm mode")
+	if a.explicitProxy() {
+		mainEnv = applyExplicitProxyEnv(mainEnv, agynHomeMountPath, fmt.Sprintf("sandbox %s", sandboxID))
+	}
 
 	main := &runnerv1.ContainerSpec{
 		Image:            mainImage,
@@ -159,48 +162,15 @@ func (a *Assembler) AssembleSandbox(ctx context.Context, sandbox *agentsv1.Sandb
 		Name: agynBinVolumeName,
 		Kind: runnerv1.VolumeKind_VOLUME_KIND_EPHEMERAL,
 	})
-	if a.cfg.ZitiEnabled {
-		if _, err := gatewayHost(a.cfg.AgentGatewayAddress); err != nil {
-			return nil, err
-		}
-		llmProxyTarget, err := zitiServiceWaitTarget(a.cfg.AgentLLMBaseURL)
-		if err != nil {
-			return nil, err
-		}
-		zitiEnroll := &runnerv1.ContainerSpec{
-			Image:      a.cfg.ZitiSidecarImage,
-			Name:       ZitiEnrollContainerName,
-			Cmd:        buildZitiEnrollCommand(a.cfg.ZitiEnrollmentDNSUpstream, a.cfg.ZitiEnrollmentControllerResolveHost, a.cfg.ZitiEnrollmentControllerPort, a.cfg.ZitiRuntimeControllerResolveHost, a.cfg.ZitiRuntimeControllerPort),
-			Entrypoint: zitiEnrollEntrypoint,
-			Env:        zitiEnrollEnvVars(a.cfg.ZitiEnrollmentControllerResolveHost, a.cfg.ZitiEnrollmentControllerPort),
-			Mounts:     []*runnerv1.VolumeMount{{Volume: zitiIdentityVolumeName, MountPath: zitiIdentityMountPath}},
-		}
-		zitiSidecar := &runnerv1.ContainerSpec{
-			Image:                a.cfg.ZitiSidecarImage,
-			Name:                 ZitiSidecarContainerName,
-			Cmd:                  buildZitiSidecarCommand(a.cfg.WorkloadDNSUpstream),
-			Entrypoint:           zitiSidecarEntrypoint,
-			Env:                  zitiSidecarEnvVars(a.cfg.WorkloadDNSUpstream),
-			Mounts:               []*runnerv1.VolumeMount{{Volume: zitiIdentityVolumeName, MountPath: zitiIdentityMountPath}},
-			RequiredCapabilities: []string{zitiRequiredCapabilityNetAdmin},
-			AdditionalProperties: map[string]string{zitiRestartPolicyKey: zitiRestartPolicyAlways},
-		}
-		zitiWait := &runnerv1.ContainerSpec{
-			Image:      a.cfg.ZitiSidecarImage,
-			Name:       zitiWaitContainerName,
-			Entrypoint: zitiSidecarEntrypoint,
-			Cmd:        buildZitiWaitCommand(a.cfg.AgentGatewayAddress, llmProxyTarget),
-		}
-		applyEgressCA(zitiEnroll, a.egressCACert)
-		applyEgressCA(zitiSidecar, a.egressCACert)
-		applyEgressCA(zitiWait, a.egressCACert)
-		// The binaries land while the overlay is coming up; see the agent path
-		// for why the order is the lever.
-		initContainers = append(
-			append([]*runnerv1.ContainerSpec{zitiEnroll, zitiSidecar}, initContainers...),
-			zitiWait,
-		)
-		volumes = append(volumes, &runnerv1.VolumeSpec{Name: zitiIdentityVolumeName, Kind: runnerv1.VolumeKind_VOLUME_KIND_EPHEMERAL})
+	overlay, err := a.overlay()
+	if err != nil {
+		return nil, err
+	}
+	// The binaries land while the overlay comes up; see overlayPlan.withInit.
+	initContainers = overlay.withInit(initContainers)
+	if overlay != nil {
+		main.Mounts = append(main.Mounts, overlay.mainMounts...)
+		volumes = append(volumes, overlay.volumes...)
 	}
 	sort.Slice(volumes, func(i, j int) bool { return volumes[i].Name < volumes[j].Name })
 	request := &runnerv1.StartWorkloadRequest{
@@ -216,11 +186,8 @@ func (a *Assembler) AssembleSandbox(ctx context.Context, sandbox *agentsv1.Sandb
 			LabelKeyPrefix + LabelEnvironmentID:  environmentID.String(),
 		},
 	}
-	if a.cfg.ZitiEnabled {
-		request.DnsConfig = &runnerv1.DnsConfig{
-			Nameservers: []string{zitiDNSNameserver},
-			Searches:    []string{zitiDNSSearchService, zitiDNSSearchCluster},
-		}
+	if overlay != nil {
+		request.DnsConfig = overlay.dnsConfig
 	}
 	persistentVolumes, err := volumeResolver.PersistentVolumes()
 	if err != nil {
@@ -341,7 +308,7 @@ func flavorAllocatedResources(flavor *runnersv1.Flavor) (int32, int64, error) {
 }
 
 func (a *Assembler) baseSandboxEnvVars(sandbox *agentsv1.Sandbox, environment *agentsv1.Environment) []*runnerv1.EnvVar {
-	gatewayURL := buildGatewayURL(a.cfg.AgentGatewayAddress)
+	endpoints := a.workloadEndpoints()
 	vars := []*runnerv1.EnvVar{
 		{Name: "AGYND_MODE", Value: SandboxHolderMode},
 		{Name: "SANDBOX_ID", Value: sandbox.GetMeta().GetId()},
@@ -351,17 +318,17 @@ func (a *Assembler) baseSandboxEnvVars(sandbox *agentsv1.Sandbox, environment *a
 		{Name: "ENVIRONMENT_NAME", Value: environment.GetName()},
 		{Name: "WORKSPACE_DIR", Value: SandboxWorkspaceMountPath},
 		{Name: "ENVIRONMENT_ID", Value: sandbox.GetEnvironmentId()},
-		{Name: "GATEWAY_ADDRESS", Value: a.cfg.AgentGatewayAddress},
-		{Name: "AGYN_GATEWAY_URL", Value: gatewayURL},
-		{Name: "LLM_BASE_URL", Value: a.cfg.AgentLLMBaseURL},
+		{Name: "GATEWAY_ADDRESS", Value: endpoints.gateway},
+		{Name: "AGYN_GATEWAY_URL", Value: endpoints.gatewayURL},
+		{Name: "LLM_BASE_URL", Value: endpoints.llmBaseURL},
 	}
-	if a.cfg.AgentTracingAddress != "" {
-		vars = append(vars, &runnerv1.EnvVar{Name: "TRACING_ADDRESS", Value: a.cfg.AgentTracingAddress})
+	if endpoints.tracing != "" {
+		vars = append(vars, &runnerv1.EnvVar{Name: "TRACING_ADDRESS", Value: endpoints.tracing})
 		// The same address, for anything in the workload that exports OTLP on
 		// its own rather than through agynd. It named a collector sidecar that
 		// no longer runs -- spans were sent to a closed port and the export
 		// blocked the turn that produced them.
-		vars = append(vars, &runnerv1.EnvVar{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: "http://" + a.cfg.AgentTracingAddress})
+		vars = append(vars, &runnerv1.EnvVar{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: "http://" + endpoints.tracing})
 	}
 	return vars
 }

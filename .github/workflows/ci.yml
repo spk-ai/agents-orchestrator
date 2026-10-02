@@ -40,6 +40,12 @@ jobs:
       - name: Run tests
         run: go test ./...
 
+      # explicit-proxy task Pods as k8s-runner renders them, evaluated by the
+      # pinned Kubernetes v1.35 restricted Pod Security evaluator.
+      - name: Evaluate task Pod Security fixtures (restricted v1.35)
+        working-directory: hack/podcheck
+        run: go test ./...
+
       - name: Build
         run: go build ./...
 

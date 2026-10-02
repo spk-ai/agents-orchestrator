@@ -1,0 +1,233 @@
+{
+  "kind": "Pod",
+  "apiVersion": "v1",
+  "metadata": {
+    "name": "allowed-explicit-proxy-agent",
+    "namespace": "agyn-workloads"
+  },
+  "spec": {
+    "volumes": [
+      {
+        "name": "agyn-bin",
+        "emptyDir": {}
+      },
+      {
+        "name": "agyn-home",
+        "emptyDir": {}
+      },
+      {
+        "name": "ziti-identity",
+        "emptyDir": {}
+      },
+      {
+        "name": "inline-files",
+        "secret": {
+          "secretName": "fixture-inline-files"
+        }
+      }
+    ],
+    "initContainers": [
+      {
+        "name": "ziti-enroll",
+        "image": "ghcr.io/spk-ai/k8s-runner@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "resources": {},
+        "volumeMounts": [
+          {
+            "name": "ziti-identity",
+            "mountPath": "/netfoundry"
+          }
+        ],
+        "securityContext": {
+          "capabilities": {
+            "drop": [
+              "ALL"
+            ]
+          },
+          "runAsNonRoot": true,
+          "readOnlyRootFilesystem": true,
+          "allowPrivilegeEscalation": false
+        }
+      },
+      {
+        "name": "ziti-sidecar",
+        "image": "ghcr.io/spk-ai/k8s-runner@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "resources": {},
+        "restartPolicy": "Always",
+        "volumeMounts": [
+          {
+            "name": "ziti-identity",
+            "mountPath": "/netfoundry"
+          }
+        ],
+        "securityContext": {
+          "capabilities": {
+            "drop": [
+              "ALL"
+            ]
+          },
+          "runAsNonRoot": true,
+          "readOnlyRootFilesystem": true,
+          "allowPrivilegeEscalation": false
+        }
+      },
+      {
+        "name": "agynd-cli-init",
+        "image": "agynd-cli-init:fixture",
+        "resources": {},
+        "volumeMounts": [
+          {
+            "name": "agyn-bin",
+            "mountPath": "/agyn"
+          },
+          {
+            "name": "inline-files",
+            "readOnly": true,
+            "mountPath": "/etc/ssl/certs/ca-certificates.crt",
+            "subPath": "inline-file-0"
+          }
+        ],
+        "securityContext": {
+          "capabilities": {
+            "drop": [
+              "ALL"
+            ]
+          },
+          "runAsNonRoot": true,
+          "allowPrivilegeEscalation": false
+        }
+      },
+      {
+        "name": "agyn-cli-init",
+        "image": "agyn-cli-init:fixture",
+        "resources": {},
+        "volumeMounts": [
+          {
+            "name": "agyn-bin",
+            "mountPath": "/agyn"
+          },
+          {
+            "name": "inline-files",
+            "readOnly": true,
+            "mountPath": "/etc/ssl/certs/ca-certificates.crt",
+            "subPath": "inline-file-0"
+          }
+        ],
+        "securityContext": {
+          "capabilities": {
+            "drop": [
+              "ALL"
+            ]
+          },
+          "runAsNonRoot": true,
+          "allowPrivilegeEscalation": false
+        }
+      },
+      {
+        "name": "agent-runtime",
+        "image": "registry.agyn.test/org-one/agent-runtime:1.0.0",
+        "resources": {},
+        "volumeMounts": [
+          {
+            "name": "agyn-bin",
+            "mountPath": "/agyn"
+          },
+          {
+            "name": "inline-files",
+            "readOnly": true,
+            "mountPath": "/etc/ssl/certs/ca-certificates.crt",
+            "subPath": "inline-file-0"
+          }
+        ],
+        "securityContext": {
+          "capabilities": {
+            "drop": [
+              "ALL"
+            ]
+          },
+          "runAsNonRoot": true,
+          "allowPrivilegeEscalation": false
+        }
+      },
+      {
+        "name": "ziti-wait",
+        "image": "ghcr.io/spk-ai/k8s-runner@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "resources": {},
+        "securityContext": {
+          "capabilities": {
+            "drop": [
+              "ALL"
+            ]
+          },
+          "runAsNonRoot": true,
+          "readOnlyRootFilesystem": true,
+          "allowPrivilegeEscalation": false
+        }
+      }
+    ],
+    "containers": [
+      {
+        "name": "agent-aaaaaaaa-bbbbbbbb",
+        "image": "agent-image",
+        "resources": {},
+        "volumeMounts": [
+          {
+            "name": "agyn-bin",
+            "mountPath": "/agyn"
+          },
+          {
+            "name": "agyn-home",
+            "mountPath": "/home/agyn"
+          },
+          {
+            "name": "inline-files",
+            "readOnly": true,
+            "mountPath": "/etc/ssl/certs/ca-certificates.crt",
+            "subPath": "inline-file-0"
+          }
+        ],
+        "securityContext": {
+          "capabilities": {
+            "drop": [
+              "ALL"
+            ]
+          },
+          "runAsNonRoot": true,
+          "allowPrivilegeEscalation": false
+        }
+      },
+      {
+        "name": "mcp-cccccccc",
+        "image": "mcp-image",
+        "resources": {},
+        "volumeMounts": [
+          {
+            "name": "inline-files",
+            "readOnly": true,
+            "mountPath": "/etc/ssl/certs/ca-certificates.crt",
+            "subPath": "inline-file-0"
+          }
+        ],
+        "securityContext": {
+          "capabilities": {
+            "drop": [
+              "ALL"
+            ]
+          },
+          "runAsNonRoot": true,
+          "allowPrivilegeEscalation": false
+        }
+      }
+    ],
+    "securityContext": {
+      "runAsUser": 10001,
+      "runAsGroup": 10001,
+      "runAsNonRoot": true,
+      "fsGroup": 10001,
+      "fsGroupChangePolicy": "OnRootMismatch",
+      "seccompProfile": {
+        "type": "RuntimeDefault"
+      }
+    }
+  },
+  "status": {}
+}

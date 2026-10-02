@@ -1,0 +1,44 @@
+//go:build e2e && svc_agents_orchestrator
+
+package tests
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	runnerv1 "github.com/agynio/e2e/suites/go-core/.gen/go/agynio/api/runner/v1"
+	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// Injected only into the explicit-proxy E2E leg, whose runner builds
+// restricted Pods with an empty capability allowlist. A caller asking the
+// runner directly for the old tunneler's NET_ADMIN is refused before any
+// Secret, PVC or Pod exists, so nothing can be inspected afterwards.
+func TestRestrictedRunnerRefusesNetAdmin(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	client := runnerv1.NewRunnerServiceClient(dialRunnerGRPC(t, runnerAddr))
+	workloadID := uuid.NewString()
+	_, err := client.StartWorkload(ctx, &runnerv1.StartWorkloadRequest{
+		WorkloadId: workloadID,
+		Main:       &runnerv1.ContainerSpec{Name: "main", Image: "alpine:3.21", Cmd: []string{"sleep", "1"}},
+		InitContainers: []*runnerv1.ContainerSpec{{
+			Name:                 "ziti-sidecar",
+			Image:                "alpine:3.21",
+			Cmd:                  []string{"sleep", "1"},
+			RequiredCapabilities: []string{"NET_ADMIN"},
+			AdditionalProperties: map[string]string{"restart_policy": "Always"},
+		}},
+	})
+	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != "required_capability_not_allowed: NET_ADMIN" {
+		t.Fatalf("NET_ADMIN start: got %v, want InvalidArgument required_capability_not_allowed: NET_ADMIN", err)
+	}
+	_, err = client.InspectWorkload(ctx, &runnerv1.InspectWorkloadRequest{WorkloadId: workloadID})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("refused workload %s must not exist: %v", workloadID, err)
+	}
+	t.Logf("runner refused NET_ADMIN for %s and created nothing", workloadID)
+}

@@ -2,12 +2,28 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+)
+
+const (
+	// WorkloadNetworkModeTProxy is the upstream default: a NET_ADMIN
+	// tunneler sidecar intercepts DNS and TCP for the whole Pod, which
+	// therefore cannot run under the restricted Pod Security Standard.
+	WorkloadNetworkModeTProxy = "tproxy"
+	// WorkloadNetworkModeExplicitProxy runs the unprivileged workload-proxy
+	// sidecar: loopback forwards for the platform endpoints and an explicit
+	// HTTP(S) proxy for everything else, with no capability, no resolver or
+	// hosts file writes and no DNS override. It requires ZITI_ENABLED and a
+	// runner building restricted Pods.
+	WorkloadNetworkModeExplicitProxy = "explicit-proxy"
+
+	defaultWorkloadProxyEntrypoint = "/app/workload-proxy"
 )
 
 type Config struct {
@@ -66,6 +82,13 @@ type Config struct {
 	// value and grants it admin on the cluster; nothing here may act as anyone
 	// else.
 	PlatformIdentityID uuid.UUID
+	// WorkloadNetworkMode selects how a task Pod reaches the overlay; see
+	// WorkloadNetworkModeTProxy and WorkloadNetworkModeExplicitProxy.
+	WorkloadNetworkMode string
+	// WorkloadProxyImage and WorkloadProxyEntrypoint run k8s-runner's
+	// workload-proxy (enroll, serve, wait) in explicit-proxy mode.
+	WorkloadProxyImage      string
+	WorkloadProxyEntrypoint string
 }
 
 func FromEnv() (Config, error) {
@@ -212,6 +235,37 @@ func FromEnv() (Config, error) {
 	cfg.ZitiSidecarImage = os.Getenv("ZITI_SIDECAR_IMAGE")
 	if cfg.ZitiSidecarImage == "" {
 		cfg.ZitiSidecarImage = "openziti/ziti-tunnel:2.0.0-pre10"
+	}
+	cfg.WorkloadNetworkMode = strings.ToLower(strings.TrimSpace(os.Getenv("WORKLOAD_NETWORK_MODE")))
+	if cfg.WorkloadNetworkMode == "" {
+		cfg.WorkloadNetworkMode = WorkloadNetworkModeTProxy
+	}
+	cfg.WorkloadProxyImage = strings.TrimSpace(os.Getenv("WORKLOAD_PROXY_IMAGE"))
+	cfg.WorkloadProxyEntrypoint = strings.TrimSpace(os.Getenv("WORKLOAD_PROXY_ENTRYPOINT"))
+	if cfg.WorkloadProxyEntrypoint == "" {
+		cfg.WorkloadProxyEntrypoint = defaultWorkloadProxyEntrypoint
+	}
+	switch cfg.WorkloadNetworkMode {
+	case WorkloadNetworkModeTProxy:
+	case WorkloadNetworkModeExplicitProxy:
+		// Fail here rather than assemble a Pod with no overlay at all, or one
+		// that silently falls back to the privileged tunneler.
+		if !cfg.ZitiEnabled {
+			return Config{}, fmt.Errorf("WORKLOAD_NETWORK_MODE=explicit-proxy requires ZITI_ENABLED=true")
+		}
+		if cfg.WorkloadProxyImage == "" {
+			return Config{}, fmt.Errorf("WORKLOAD_PROXY_IMAGE is required when WORKLOAD_NETWORK_MODE=explicit-proxy")
+		}
+		if strings.ContainsAny(cfg.WorkloadProxyEntrypoint, " \t\r\n") || !strings.HasPrefix(cfg.WorkloadProxyEntrypoint, "/") {
+			return Config{}, fmt.Errorf("WORKLOAD_PROXY_ENTRYPOINT must be one absolute path")
+		}
+		// The LLM forward is byte-transparent TCP to the overlay service, so
+		// the workload must speak the base URL's own plaintext protocol to it.
+		if parsed, err := url.Parse(cfg.AgentLLMBaseURL); err != nil || parsed.Scheme != "http" || parsed.Hostname() == "" {
+			return Config{}, fmt.Errorf("WORKLOAD_NETWORK_MODE=explicit-proxy requires an http:// AGENT_LLM_BASE_URL")
+		}
+	default:
+		return Config{}, fmt.Errorf("WORKLOAD_NETWORK_MODE must be %s or %s", WorkloadNetworkModeTProxy, WorkloadNetworkModeExplicitProxy)
 	}
 	clusterDNS := os.Getenv("CLUSTER_DNS")
 	cfg.WorkloadDNSUpstream = os.Getenv("WORKLOAD_DNS_UPSTREAM")

@@ -1,0 +1,177 @@
+{
+  "kind": "Pod",
+  "apiVersion": "v1",
+  "metadata": {
+    "name": "denied-tproxy-agent",
+    "namespace": "agyn-workloads"
+  },
+  "spec": {
+    "volumes": [
+      {
+        "name": "agyn-bin",
+        "emptyDir": {}
+      },
+      {
+        "name": "ziti-identity",
+        "emptyDir": {}
+      },
+      {
+        "name": "inline-files",
+        "secret": {
+          "secretName": "fixture-inline-files"
+        }
+      }
+    ],
+    "initContainers": [
+      {
+        "name": "ziti-enroll",
+        "image": "ziti-image",
+        "resources": {},
+        "volumeMounts": [
+          {
+            "name": "ziti-identity",
+            "mountPath": "/netfoundry"
+          },
+          {
+            "name": "inline-files",
+            "readOnly": true,
+            "mountPath": "/etc/ssl/certs/ca-certificates.crt",
+            "subPath": "inline-file-0"
+          }
+        ]
+      },
+      {
+        "name": "ziti-sidecar",
+        "image": "ziti-image",
+        "resources": {},
+        "restartPolicy": "Always",
+        "volumeMounts": [
+          {
+            "name": "ziti-identity",
+            "mountPath": "/netfoundry"
+          },
+          {
+            "name": "inline-files",
+            "readOnly": true,
+            "mountPath": "/etc/ssl/certs/ca-certificates.crt",
+            "subPath": "inline-file-0"
+          }
+        ],
+        "securityContext": {
+          "capabilities": {
+            "add": [
+              "NET_ADMIN"
+            ]
+          }
+        }
+      },
+      {
+        "name": "agynd-cli-init",
+        "image": "agynd-cli-init:fixture",
+        "resources": {},
+        "volumeMounts": [
+          {
+            "name": "agyn-bin",
+            "mountPath": "/agyn"
+          },
+          {
+            "name": "inline-files",
+            "readOnly": true,
+            "mountPath": "/etc/ssl/certs/ca-certificates.crt",
+            "subPath": "inline-file-0"
+          }
+        ]
+      },
+      {
+        "name": "agyn-cli-init",
+        "image": "agyn-cli-init:fixture",
+        "resources": {},
+        "volumeMounts": [
+          {
+            "name": "agyn-bin",
+            "mountPath": "/agyn"
+          },
+          {
+            "name": "inline-files",
+            "readOnly": true,
+            "mountPath": "/etc/ssl/certs/ca-certificates.crt",
+            "subPath": "inline-file-0"
+          }
+        ]
+      },
+      {
+        "name": "agent-runtime",
+        "image": "registry.agyn.test/org-one/agent-runtime:1.0.0",
+        "resources": {},
+        "volumeMounts": [
+          {
+            "name": "agyn-bin",
+            "mountPath": "/agyn"
+          },
+          {
+            "name": "inline-files",
+            "readOnly": true,
+            "mountPath": "/etc/ssl/certs/ca-certificates.crt",
+            "subPath": "inline-file-0"
+          }
+        ]
+      },
+      {
+        "name": "ziti-wait",
+        "image": "ziti-image",
+        "resources": {},
+        "volumeMounts": [
+          {
+            "name": "inline-files",
+            "readOnly": true,
+            "mountPath": "/etc/ssl/certs/ca-certificates.crt",
+            "subPath": "inline-file-0"
+          }
+        ]
+      }
+    ],
+    "containers": [
+      {
+        "name": "agent-aaaaaaaa-bbbbbbbb",
+        "image": "agent-image",
+        "resources": {},
+        "volumeMounts": [
+          {
+            "name": "agyn-bin",
+            "mountPath": "/agyn"
+          },
+          {
+            "name": "inline-files",
+            "readOnly": true,
+            "mountPath": "/etc/ssl/certs/ca-certificates.crt",
+            "subPath": "inline-file-0"
+          }
+        ]
+      },
+      {
+        "name": "mcp-cccccccc",
+        "image": "mcp-image",
+        "resources": {},
+        "volumeMounts": [
+          {
+            "name": "inline-files",
+            "readOnly": true,
+            "mountPath": "/etc/ssl/certs/ca-certificates.crt",
+            "subPath": "inline-file-0"
+          }
+        ]
+      }
+    ],
+    "dnsPolicy": "None",
+    "dnsConfig": {
+      "nameservers": [
+        "127.0.0.1"
+      ],
+      "searches": [
+        "svc.cluster.local",
+        "cluster.local"
+      ]
+    }
+  },
+  "status": {}
+}
