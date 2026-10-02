@@ -71,10 +71,14 @@ done
 # renewal times. Rows carry ids, types and timestamps only.
 grep -hE 'garbage collected service identity|service identity GC sweep failed|failed to delete service identity|already deleted|failed to cleanup|ZitiManagementService listening' \
   "${out}"/logs/"${platform_ns}".ziti-management-*.log >"${out}/ziti-management-identity-timeline.txt" 2>/dev/null
-for pod in $(k get pods -n "${platform_ns}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E 'postgres'); do
-  for db in $(k exec -n "${platform_ns}" "${pod}" -- psql -U postgres -AtX -c 'select datname from pg_database where not datistemplate' 2>/dev/null); do
-    if [ "$(k exec -n "${platform_ns}" "${pod}" -- psql -U postgres -d "${db}" -AtX -c "select to_regclass('public.service_identities') is not null" 2>/dev/null)" = "t" ]; then
-      k exec -n "${platform_ns}" "${pod}" -- psql -U postgres -d "${db}" -AX -F $'\t' -c \
+# The platform superuser is the container's POSTGRES_USER, over the local socket.
+# shellcheck disable=SC2016 # expanded inside the postgres container only.
+psql_in() { local pod="$1"; shift; k exec -n "${platform_ns}" "${pod}" -- sh -c 'psql -U "${POSTGRES_USER:-postgres}" "$@"' psql "$@"; }
+for pod in $(k get pods -n "${platform_ns}" --field-selector=status.phase=Running \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E 'postgres'); do
+  for db in $(psql_in "${pod}" -AtX -c 'select datname from pg_database where not datistemplate' 2>/dev/null); do
+    if [ "$(psql_in "${pod}" -d "${db}" -AtX -c "select to_regclass('public.service_identities') is not null" 2>/dev/null)" = "t" ]; then
+      psql_in "${pod}" -d "${db}" -AX -F $'\t' -c \
         'select ziti_identity_id, service_type, created_at, lease_expires_at, now() as collected_at from service_identities order by created_at' \
         >"${out}/ziti-management-service-identity-leases.tsv" 2>&1 || note "lease table query failed in ${pod}/${db}"
     fi
