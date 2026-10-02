@@ -8,3 +8,6 @@
 
 # Reviewed API checkout used by CI; generated bindings remain untracked.
 .ci-api/
+
+# Running the E2E Python fixtures locally writes bytecode beside them.
+__pycache__/
