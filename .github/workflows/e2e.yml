@@ -41,7 +41,7 @@ on:
       gateway_ref:
         description: Gateway ref to deploy from.
         required: false
-        default: 0ee317b7bcabe17bb43baf996f0ceedef6b4a7ed
+        default: 45171b64043510f2df643ba7b9938800733a98e7
       llm_proxy_ref:
         description: llm-proxy ref to deploy from.
         required: false
@@ -58,7 +58,7 @@ env:
   THREADS_REF: 066fe51e57343b130b38af09d061a6540e0e8e20
   AGYND_CLI_REF: 495920a92cc359e0693e8710f11469240bd5a770
   EXPOSE_REF: da7ef4ffd81fcd829dba6e35c6467e958e209df5
-  GATEWAY_REF: 0ee317b7bcabe17bb43baf996f0ceedef6b4a7ed
+  GATEWAY_REF: 45171b64043510f2df643ba7b9938800733a98e7
   LLM_PROXY_REF: 212b0a8b90c377cc76ca00c389434921270b572a
 
 permissions:
@@ -1030,10 +1030,12 @@ jobs:
           kubectl logs pod/ziti-sidecar-dns-preflight -n agyn-workloads
           kubectl delete pod ziti-sidecar-dns-preflight -n agyn-workloads --wait=false
 
+      # spk-ai/gateway#2: /readyz is 200 only after a router confirmed the
+      # Ziti terminator, and the listening line is logged only after that.
       - name: Checkout gateway
         uses: actions/checkout@v4
         with:
-          repository: agynio/gateway
+          repository: spk-ai/gateway
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.gateway_ref || env.GATEWAY_REF }}
           path: .e2e-deps/gateway
 
@@ -1107,7 +1109,11 @@ jobs:
           NODE
           devspace dev
 
+      # Readiness, not log text: the Ziti SDK logs thousands of bind rejections
+      # around the listening line, and ListenWithOptions returns before any
+      # router accepts the bind.
       - name: Verify gateway Ziti service binding
+        id: gateway_ziti_ready
         run: |-
           set -euo pipefail
           selector="app.kubernetes.io/name=gateway"
@@ -1139,21 +1145,67 @@ jobs:
             kubectl get deployment gateway -n agyn-platform -o yaml >&2 || true
             exit 1
           fi
-          attempts=0
-          while [ "${attempts}" -lt 120 ]; do
-            if kubectl logs "pod/${source_pod}" -n agyn-platform --all-containers --tail=500 2>/dev/null | grep -q 'gateway listening on ziti service gateway'; then
-              kubectl logs "pod/${source_pod}" -n agyn-platform --all-containers --tail=200
+          print_bind_summary() {
+            logs="$(mktemp)"
+            for previous in false true; do
+              kubectl logs "pod/${source_pod}" -n agyn-platform --all-containers --timestamps --previous="${previous}" \
+                2>/dev/null >>"${logs}" || true
+            done
+            echo "== gateway Ziti bind summary (${source_pod}) =="
+            echo "router rejections (identity not found by id): $(grep -c 'identity not found by id' "${logs}" || true)"
+            echo "SDK bind errors: $(grep -cE 'bind request resulted in disconnect|creating listener failed|failed to establish listener' "${logs}" || true)"
+            echo "-- first SDK bind errors --"
+            grep -E 'bind request resulted in disconnect|creating listener failed|failed to establish listener' "${logs}" | head -n 6 | cut -c1-400 || true
+            echo "-- last SDK bind errors --"
+            grep -E 'bind request resulted in disconnect|creating listener failed|failed to establish listener' "${logs}" | tail -n 6 | cut -c1-400 || true
+            echo "-- gateway Ziti manager --"
+            grep -E 'gateway listening on|ziti enrollment|re-enrolling ziti|ziti service listener|ziti lease|bind ziti service|establish ziti service listener|lost ziti service listener|failed to load platform configuration' \
+              "${logs}" | tail -n 80 | cut -c1-400 || true
+            rm -f "${logs}"
+          }
+          port_forward_log="$(mktemp)"
+          start_port_forward() {
+            kubectl port-forward -n agyn-platform "pod/${source_pod}" 18090:8080 >"${port_forward_log}" 2>&1 &
+            port_forward_pid="$!"
+          }
+          cleanup() {
+            kill "${port_forward_pid}" >/dev/null 2>&1 || true
+            wait "${port_forward_pid}" >/dev/null 2>&1 || true
+          }
+          start_port_forward
+          trap cleanup EXIT
+          started="${SECONDS}"
+          last_status=""
+          while :; do
+            status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:18090/readyz 2>/dev/null || true)"
+            if [ "${status}" = "200" ]; then
+              echo "gateway /readyz returned 200 after $((SECONDS - started))s"
+              print_bind_summary
               exit 0
             fi
-            attempts=$((attempts + 1))
-            sleep 1
+            if [ "${status}" != "${last_status}" ]; then
+              echo "gateway /readyz returned ${status:-no response} after $((SECONDS - started))s"
+              last_status="${status}"
+            fi
+            if [ "$((SECONDS - started))" -ge 240 ]; then
+              echo "gateway Ziti service listener not established within 240s (/readyz ${status:-no response})" >&2
+              cat "${port_forward_log}" >&2 || true
+              kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
+              print_bind_summary >&2
+              exit 1
+            fi
+            if ! kill -0 "${port_forward_pid}" >/dev/null 2>&1; then
+              cat "${port_forward_log}" >&2 || true
+              start_port_forward
+            fi
+            sleep 2
           done
-          echo "gateway source pod did not report Ziti service listener" >&2
-          kubectl get deployment gateway -n agyn-platform -o yaml >&2 || true
-          kubectl get pods -n agyn-platform -l "${selector}" -o wide >&2 || true
-          kubectl describe pods -n agyn-platform -l "${selector}" >&2 || true
-          kubectl logs "pod/${source_pod}" -n agyn-platform --all-containers --tail=500 >&2 || true
-          exit 1
+
+      # The router-side view right after binding; the final collection may
+      # only see a data model that caught up later.
+      - name: Snapshot Ziti state after gateway binding
+        if: ${{ always() && steps.gateway_ziti_ready.outcome != 'skipped' }}
+        run: bash .github/e2e/collect-ziti-diagnostics.sh "${RUNNER_TEMP}/ziti-diagnostics/after-gateway-binding"
 
       - name: Checkout api
         uses: actions/checkout@v4
@@ -1309,6 +1361,7 @@ jobs:
           set -euo pipefail
           node ../.github/scripts/patch-e2e-agent-instances.js
           python3 ../.e2e-deps/k8s-runner/.github/e2e/patch-native-client.py .
+          cp ../.github/e2e/gateway_ziti_probe_test.go.txt suites/go-core/tests/gateway_ziti_probe_test.go
           cd suites/go-core
 
           protoc_bin="${RUNNER_TEMP}/go-core-protoc-gen"
@@ -1371,12 +1424,30 @@ jobs:
             --template "${proto_template}"
           gofmt -w tests/*.go
           find .gen/go -type f -name '*.go' -print0 | xargs -0 gofmt -w
+          # The probe enrolls through ziti/enroll, which imports gabs; the
+          # pinned suite's go.sum does not list it.
+          go get github.com/Jeffail/gabs@v1.4.0
           CGO_ENABLED=0 go test -tags 'e2e svc_agents_orchestrator' ./tests -run TestNonExistent -count=1
+
+      # Dials the Gateway's own Ziti terminator as a synthetic agent before the
+      # long acceptance runs depend on it.
+      - name: Probe gateway over native Ziti transport
+        uses: ./e2e/.github/actions/run-tests
+        env:
+          E2E_SUITES: go-core
+          E2E_GO_TEST_RUN: "^TestGatewayZitiNativeTransport$"
+          E2E_SKIP_BUF_GENERATE: "true"
+          E2E_ARTIFACT_NAME_SUFFIX: "-gateway-ziti-probe"
+        with:
+          e2e-ref: 435b549a937129b6858e7314648eb690894209fe
+          service: agents_orchestrator
+          include_smoke: "false"
 
       - name: Run focused go-core acceptance tests
         uses: ./e2e/.github/actions/run-tests
         env:
           E2E_SUITES: go-core
+          E2E_ARTIFACT_NAME_SUFFIX: "-focused"
           E2E_GO_TEST_RUN: "TestAgentAgynCLIWaitToAnotherAgent|TestMCPToolsE2E|TestWorkloadStartRetryPolicyFastRetry"
           E2E_SKIP_BUF_GENERATE: "true"
         with:
@@ -1389,6 +1460,7 @@ jobs:
         env:
           E2E_SUITES: go-core playwright-chat-app
           E2E_SKIP_BUF_GENERATE: "true"
+          E2E_ARTIFACT_NAME_SUFFIX: "-full"
         with:
           e2e-ref: 435b549a937129b6858e7314648eb690894209fe
           service: agents_orchestrator
@@ -1425,6 +1497,18 @@ jobs:
             echo "== ${pod} previous logs =="
             kubectl logs -n agyn-workloads "${pod}" --all-containers --previous --tail=500 --prefix=true || true
           done
+
+      - name: Collect sanitized Ziti diagnostics
+        if: always()
+        run: bash .github/e2e/collect-ziti-diagnostics.sh "${RUNNER_TEMP}/ziti-diagnostics/final"
+
+      - name: Upload sanitized Ziti diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ziti-diagnostics
+          path: ${{ runner.temp }}/ziti-diagnostics/
+          if-no-files-found: warn
 
       # Provisioning uses a disposable Helm-owned VM, with no ArgoCD apps.
       - name: Stop disposable platform VM

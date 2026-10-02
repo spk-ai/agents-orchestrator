@@ -381,3 +381,11 @@ replace(
   '    - name: Checkout e2e repository\n      uses: actions/checkout@v4',
   '    - name: Checkout e2e repository\n      if: ${{ false }}\n      uses: actions/checkout@v4',
 );
+// upload-artifact@v4 rejects a second upload under one name, and this job calls
+// run-tests more than once; each call names its suffix.
+replace(
+  actionPath,
+  'distinct artifact name per call',
+  "        name: e2e-artifacts-${{ inputs.service != '' && inputs.service || github.job }}-${{ strategy.job-index || '0' }}\n",
+  "        name: e2e-artifacts-${{ inputs.service != '' && inputs.service || github.job }}-${{ strategy.job-index || '0' }}${{ env.E2E_ARTIFACT_NAME_SUFFIX }}\n",
+);
