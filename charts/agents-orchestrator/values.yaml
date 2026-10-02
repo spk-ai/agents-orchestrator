@@ -185,6 +185,16 @@ env:
   # when the release moves.
   - name: EGRESS_CA_NAMESPACE
     value: "{{ .Release.Namespace }}"
+# Projected ServiceAccount token attached to Runners calls only (metadata
+# x-agyn-caller-token). Runners validates it with a TokenReview against this
+# audience and authorizes the agents-orchestrator ServiceAccount. Kubelet
+# rotates it; the orchestrator re-reads it when the file changes.
+runnersCallerToken:
+  enabled: true
+  audience: agyn-runners
+  expirationSeconds: 600
+  mountPath: /var/run/secrets/agyn.io/runners-token
+
 envFrom: []
 extraEnvVars: []
 extraEnvVarsCM: ""

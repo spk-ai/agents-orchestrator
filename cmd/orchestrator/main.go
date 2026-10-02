@@ -28,6 +28,7 @@ import (
 	"github.com/agynio/agents-orchestrator/internal/leader"
 	"github.com/agynio/agents-orchestrator/internal/reconciler"
 	"github.com/agynio/agents-orchestrator/internal/runnerdial"
+	"github.com/agynio/agents-orchestrator/internal/runnerscreds"
 	"github.com/agynio/agents-orchestrator/internal/subscriber"
 	"github.com/agynio/agents-orchestrator/internal/zitimanager"
 	"k8s.io/client-go/kubernetes"
@@ -94,7 +95,13 @@ func run() error {
 	}
 	defer closeConn(llmConn)
 
-	runnersConn, err := grpc.NewClient(cfg.RunnersAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Only the Runners connection carries this pod's projected ServiceAccount
+	// token; Runners authorizes control-plane callers with a TokenReview.
+	runnersOptions, err := runnerscreds.DialOptions(cfg.RunnersTokenFile)
+	if err != nil {
+		return fmt.Errorf("runners caller token: %w", err)
+	}
+	runnersConn, err := grpc.NewClient(cfg.RunnersAddress, runnersOptions...)
 	if err != nil {
 		return fmt.Errorf("dial runners: %w", err)
 	}

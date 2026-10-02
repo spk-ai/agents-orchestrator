@@ -371,6 +371,7 @@ func setBaseEnv(t *testing.T) {
 	t.Setenv("SECRETS_ADDRESS", "")
 	t.Setenv("RUNNER_ADDRESS", "")
 	t.Setenv("RUNNERS_ADDRESS", "")
+	t.Setenv("RUNNERS_TOKEN_FILE", "")
 	t.Setenv("METERING_SERVICE_ADDRESS", "")
 	t.Setenv("METERING_SAMPLE_INTERVAL", "")
 	t.Setenv("ZITI_MANAGEMENT_ADDRESS", "")
@@ -546,5 +547,24 @@ func TestE2EOpenFGAServiceDiscoveryDrainsProducer(t *testing.T) {
 	}
 	if string(output) != "agyn-platform\topenfga\n" {
 		t.Fatalf("unexpected selected service: %q", output)
+	}
+}
+
+func TestFromEnvRunnersTokenFile(t *testing.T) {
+	setBaseEnv(t)
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if cfg.RunnersTokenFile != "" {
+		t.Fatalf("runners token file must default to empty, got %q", cfg.RunnersTokenFile)
+	}
+	t.Setenv("RUNNERS_TOKEN_FILE", " /var/run/secrets/agyn.io/runners-token/token ")
+	cfg, err = FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if cfg.RunnersTokenFile != "/var/run/secrets/agyn.io/runners-token/token" {
+		t.Fatalf("runners token file %q", cfg.RunnersTokenFile)
 	}
 }

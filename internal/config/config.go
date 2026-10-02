@@ -11,13 +11,16 @@ import (
 )
 
 type Config struct {
-	ThreadsAddress                      string
-	NotificationsAddress                string
-	AgentsAddress                       string
-	SecretsAddress                      string
-	LLMAddress                          string
-	RunnerAddress                       string
-	RunnersAddress                      string
+	ThreadsAddress       string
+	NotificationsAddress string
+	AgentsAddress        string
+	SecretsAddress       string
+	LLMAddress           string
+	RunnerAddress        string
+	RunnersAddress       string
+	// RunnersTokenFile is the projected ServiceAccount token (audience
+	// agyn-runners) attached to Runners calls only. Empty sends none.
+	RunnersTokenFile                    string
 	MeteringServiceAddress              string
 	MeteringSampleInterval              time.Duration
 	ZitiEnabled                         bool
@@ -98,6 +101,7 @@ func FromEnv() (Config, error) {
 	if cfg.RunnersAddress == "" {
 		cfg.RunnersAddress = "runners:50051"
 	}
+	cfg.RunnersTokenFile = strings.TrimSpace(os.Getenv("RUNNERS_TOKEN_FILE"))
 	cfg.MeteringServiceAddress = os.Getenv("METERING_SERVICE_ADDRESS")
 	if cfg.MeteringServiceAddress == "" {
 		cfg.MeteringServiceAddress = "metering:50051"
