@@ -136,7 +136,7 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		// carries its own platform version rather than a ref to build from.
 		"./.e2e-tooling/.github/actions/provision-vm",
 		"ref: 435b549a937129b6858e7314648eb690894209fe",
-		"K8S_RUNNER_REF: 13921ea6affc091054a0df9be50df9c5ee315ef7",
+		"K8S_RUNNER_REF: 0bf53883a3569b6c1b2b430eb81955ab7f1ab857",
 		"github.event_name == 'workflow_dispatch' && inputs.k8s_runner_ref || env.K8S_RUNNER_REF",
 		// The source runner is patched in place over an older platform
 		// release, so the pinned chart's single-Namespace read is applied and
@@ -144,6 +144,8 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		"uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1",
 		"version: v3.19.4",
 		"run: python3 .github/e2e/volume-backend-rbac.py",
+		// Prepared starts need the chart's workload ConfigMap and Secret rules.
+		"run: python3 .github/e2e/workload-rbac.py",
 		"pinned k8s-runner ready-log contract changed",
 		"run: python3 .github/e2e/report-workload-cleanup.py",
 		"name: Verify disposable VM native network inventory",
@@ -160,7 +162,7 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		// The Gateway's /readyz, not its log text, proves a router-confirmed
 		// terminator; a synthetic agent then dials it over the native overlay.
 		"repository: spk-ai/gateway",
-		"GATEWAY_REF: 45171b64043510f2df643ba7b9938800733a98e7",
+		"GATEWAY_REF: b80912e71996acdc7a3234e98ce4710c267a6284",
 		"http://127.0.0.1:18090/readyz",
 		"cp ../.github/e2e/gateway_ziti_probe_test.go.txt suites/go-core/tests/gateway_ziti_probe_test.go",
 		`E2E_GO_TEST_RUN: "^TestGatewayZitiNativeTransport$"`,
@@ -175,8 +177,10 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 			t.Fatalf("expected E2E workflow to contain %q", expected)
 		}
 	}
-	if strings.Index(e2eWorkflow, "volume-backend-rbac.py") > strings.Index(e2eWorkflow, "name: Deploy k8s-runner from source") {
-		t.Fatal("expected the volume-backend grant to precede the k8s-runner source deployment")
+	for _, grant := range []string{"volume-backend-rbac.py", "workload-rbac.py"} {
+		if strings.Index(e2eWorkflow, grant) > strings.Index(e2eWorkflow, "name: Deploy k8s-runner from source") {
+			t.Fatalf("expected %s to precede the k8s-runner source deployment", grant)
+		}
 	}
 	// The cleanup report waits for idle collection, so the failure dump must
 	// describe failing workloads first and the final Ziti snapshot follow it.

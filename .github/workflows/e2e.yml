@@ -50,7 +50,7 @@ on:
 # Init images are resolved to the newest published release by the run-tests
 # action. Pinning one here opts this workflow out of every fix shipped after it.
 env:
-  K8S_RUNNER_REF: 13921ea6affc091054a0df9be50df9c5ee315ef7
+  K8S_RUNNER_REF: 0bf53883a3569b6c1b2b430eb81955ab7f1ab857
   AGENTS_REF: df88f90f6aee77647912e7336e03d43545a2a6a4
   AUTHORIZATION_REF: 30581ca4f834ad8a0a63e14bd0f465333b3929e9
   RUNNERS_REF: 31df7a2fb51736ff2c0e05968c39636808596db5
@@ -58,7 +58,7 @@ env:
   THREADS_REF: 066fe51e57343b130b38af09d061a6540e0e8e20
   AGYND_CLI_REF: 495920a92cc359e0693e8710f11469240bd5a770
   EXPOSE_REF: da7ef4ffd81fcd829dba6e35c6467e958e209df5
-  GATEWAY_REF: 45171b64043510f2df643ba7b9938800733a98e7
+  GATEWAY_REF: b80912e71996acdc7a3234e98ce4710c267a6284
   LLM_PROXY_REF: 212b0a8b90c377cc76ca00c389434921270b572a
 
 permissions:
@@ -828,6 +828,14 @@ jobs:
       - name: Grant the source chart's volume-backend namespace read
         working-directory: .e2e-deps/k8s-runner
         run: python3 .github/e2e/volume-backend-rbac.py
+
+      # Prepared starts keep revocation records in workload ConfigMaps and give
+      # Pod ownership to startup Secrets; the VM's release predates those rules.
+      # The pinned script proves the grant is the chart's own Role, confined to
+      # the workload namespace.
+      - name: Grant the source chart's workload rules
+        working-directory: .e2e-deps/k8s-runner
+        run: python3 .github/e2e/workload-rbac.py
 
       - name: Deploy k8s-runner from source
         working-directory: .e2e-deps/k8s-runner
