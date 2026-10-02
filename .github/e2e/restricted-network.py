@@ -32,6 +32,7 @@ NAMESPACE = 'agyn-workloads'
 PROBE_NAMESPACE = 'default'
 PROBE_POD = 'restricted-network-probe'
 RESULT = Path(os.environ.get('RUNNER_TEMP', '/tmp')) / 'restricted-network-result.json'
+PROGRESS = Path(os.environ.get('RUNNER_TEMP', '/tmp')) / 'restricted-network-progress.json'
 PROXY = '127.0.0.1:18080'
 RESTRICTED_LABELS = {
     'pod-security.kubernetes.io/enforce': 'restricted',
@@ -188,8 +189,11 @@ def shape_checks(checks, pod):
 
 
 def connect(pod, authority):
+    # stdin stays open after the request: busybox nc half-closes on stdin EOF,
+    # and the proxy (like any Go HTTP server) treats a client that closed
+    # before the dial finished as gone. curl and real clients do not do that.
     request = f'CONNECT {authority} HTTP/1.1\\r\\nHost: {authority}\\r\\n\\r\\n'
-    return sh(pod, 'ziti-sidecar', f"printf '{request}' | timeout 15 nc -w 10 127.0.0.1 18080 | head -c 600").stdout
+    return sh(pod, 'ziti-sidecar', f"(printf '{request}'; sleep 5) | timeout 15 nc -w 10 127.0.0.1 18080 | head -c 600").stdout
 
 
 def gateway_reachable(pod):
@@ -220,7 +224,7 @@ def network_checks(checks, pod, pod_ip, cluster_ips):
         first = (answer.splitlines() or [''])[0]
         checks.record(f'proxy refuses CONNECT {authority} as destination_not_found',
                       ' 502 ' in first and 'destination_not_found' in answer, answer.splitlines()[:6])
-    plain = sh(pod, 'ziti-sidecar', "printf 'GET http://unrouted.example.org/ HTTP/1.1\\r\\nHost: unrouted.example.org\\r\\nConnection: close\\r\\n\\r\\n' | timeout 15 nc -w 10 127.0.0.1 18080 | head -c 600").stdout
+    plain = sh(pod, 'ziti-sidecar', "(printf 'GET http://unrouted.example.org/ HTTP/1.1\\r\\nHost: unrouted.example.org\\r\\nConnection: close\\r\\n\\r\\n'; sleep 5) | timeout 15 nc -w 10 127.0.0.1 18080 | head -c 600").stdout
     checks.record('proxy refuses plain HTTP to an unknown host', ' 502 ' in (plain.splitlines() or [''])[0] and 'destination_not_found' in plain, plain.splitlines()[:3])
     loop = sh(pod, 'ziti-sidecar', f'timeout 10 nc -w 5 {pod_ip} 18080 </dev/null')
     checks.record('proxy listener is not bound to the Pod IP', loop.returncode != 0, (loop.stderr or loop.stdout).strip())
@@ -268,7 +272,7 @@ def watch():
     enforced = os.environ.get('NETWORK_POLICY_ENFORCED') == 'true'
     cluster_ips = {'kubernetes': get('service', 'kubernetes', '-n', 'default')['spec']['clusterIP'],
                    'agents': get('service', 'agents', '-n', 'agyn-platform')['spec']['clusterIP']}
-    deadline = time.time() + 60 * 60
+    deadline = time.time() + 45 * 60
     attempts = []
     tried = set()
     while time.time() < deadline:
@@ -294,6 +298,8 @@ def watch():
             except Exception as error:  # the Pod may have gone mid-check
                 attempts.append({'pod': name, 'error': str(error)[:300]})
                 continue
+            finally:
+                PROGRESS.write_text(json.dumps(attempts, indent=2))
             still = kubectl('get', 'pod', name, '-n', NAMESPACE, '-o', 'jsonpath={.metadata.uid}', check=False).stdout
             if still != pod['metadata']['uid']:
                 attempts.append({'pod': name, 'error': 'Pod replaced during checks'})
@@ -305,10 +311,12 @@ def watch():
 
 
 def verify():
-    deadline = time.time() + 20 * 60
+    deadline = time.time() + 15 * 60
     while not RESULT.exists() and time.time() < deadline:
         time.sleep(10)
     if not RESULT.exists():
+        if PROGRESS.exists():
+            print('discarded attempts so far:', PROGRESS.read_text())
         sys.exit('restricted network watcher produced no result')
     result = json.loads(RESULT.read_text())
     print(json.dumps(result, indent=2))

@@ -1589,7 +1589,7 @@ jobs:
         if: matrix.network == 'explicit-proxy' && !cancelled()
         timeout-minutes: 25
         run: |-
-          set -uo pipefail
+          set +e
           python3 .github/e2e/restricted-network.py verify
           status=$?
           echo "== watcher log =="

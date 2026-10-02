@@ -57,7 +57,8 @@ func TestRestrictedRunnerRefusesNetAdmin(t *testing.T) {
 // watcher checks a live, enrolled Pod rather than one being torn down.
 func TestRestrictedTaskPodAnswersAndHolds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), responseWaitTimeout+restrictedHoldWindow+5*time.Minute)
-	defer cancel()
+	// Registered first so it runs last: the cleanups below use this context.
+	t.Cleanup(cancel)
 	agentsClient := agentsv1.NewAgentsServiceClient(dialGRPC(t, agentsAddr))
 	threadsClient := threadsv1.NewThreadsServiceClient(dialGRPC(t, threadsAddr))
 	runnerClient := runnerv1.NewRunnerServiceClient(dialRunnerGRPC(t, runnerAddr))
@@ -80,7 +81,7 @@ func TestRestrictedTaskPodAnswersAndHolds(t *testing.T) {
 	t.Cleanup(func() { archiveThread(t, setup.Context, threadsClient, threadID) })
 	labels := map[string]string{labelManagedBy: managedByValue, labelAgentID: agentID, labelThreadID: threadID}
 	sent := sendMessage(t, setup.Context, threadsClient, threadID, setup.IdentityID, "hello")
-	responseCtx, responseCancel := context.WithTimeout(ctx, responseWaitTimeout)
+	responseCtx, responseCancel := context.WithTimeout(setup.Context, responseWaitTimeout)
 	defer responseCancel()
 	body, err := pollForAgentResponse(t, responseCtx, threadsClient, runnerClient, orgID, threadID, agentID, labels, messageCreatedAt(t, sent), expectedAgentResponse)
 	if err != nil || body != expectedAgentResponse {
