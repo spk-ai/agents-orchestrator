@@ -1499,12 +1499,6 @@ jobs:
           service: agents_orchestrator
           include_smoke: "false"
 
-      # Evidence for the orchestrator's idle collection of the workloads it
-      # starts; the final Ziti snapshot below lists identities after this wait.
-      - name: Report orchestrator workload cleanup
-        if: ${{ always() && steps.orchestrator_deploy.outcome == 'success' }}
-        run: python3 .github/e2e/report-workload-cleanup.py
-
       - name: Print runtime diagnostics on failure
         if: failure()
         run: |-
@@ -1536,6 +1530,14 @@ jobs:
             echo "== ${pod} previous logs =="
             kubectl logs -n agyn-workloads "${pod}" --all-containers --previous --tail=500 --prefix=true || true
           done
+
+      # Evidence for the orchestrator's idle collection of the workloads it
+      # starts; the final Ziti snapshot below lists identities after this wait.
+      # It follows the failure dump, which must describe failing workloads
+      # before idle collection can remove them during this wait.
+      - name: Report orchestrator workload cleanup
+        if: ${{ always() && steps.orchestrator_deploy.outcome == 'success' }}
+        run: python3 .github/e2e/report-workload-cleanup.py
 
       - name: Collect sanitized Ziti diagnostics
         if: always()

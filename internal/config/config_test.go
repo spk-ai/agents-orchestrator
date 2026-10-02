@@ -178,6 +178,14 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 	if strings.Index(e2eWorkflow, "volume-backend-rbac.py") > strings.Index(e2eWorkflow, "name: Deploy k8s-runner from source") {
 		t.Fatal("expected the volume-backend grant to precede the k8s-runner source deployment")
 	}
+	// The cleanup report waits for idle collection, so the failure dump must
+	// describe failing workloads first and the final Ziti snapshot follow it.
+	dump := strings.Index(e2eWorkflow, "name: Print runtime diagnostics on failure")
+	report := strings.Index(e2eWorkflow, "run: python3 .github/e2e/report-workload-cleanup.py")
+	snapshot := strings.Index(e2eWorkflow, `collect-ziti-diagnostics.sh "${RUNNER_TEMP}/ziti-diagnostics/final"`)
+	if dump < 0 || snapshot < 0 || !(dump < report && report < snapshot) {
+		t.Fatal("expected the workload cleanup report between the failure diagnostics and the final Ziti snapshot")
+	}
 	for _, forbidden := range []string{
 		"K8S_RUNNER_REF: noa/issue-73",
 		// Bootstrap is deprecated; provisioning must not come back to it.
