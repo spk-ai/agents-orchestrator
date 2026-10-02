@@ -111,6 +111,9 @@ if [ "${logged_in}" = true ]; then
     >"${out}/edge-routers.json" || note "edge router list failed"
   zcli edge list identities 'name contains "svc-gateway" limit 100' -j | jq '[.data[]? | {id, name, createdAt, roleAttributes}]' \
     >"${out}/svc-gateway-identities.json" || note "svc-gateway identity list failed"
+  # Comparing snapshots shows which workload identities outlive the suites.
+  zcli edge list identities 'limit 500' -j | jq '[.data[]? | {id, name, createdAt, roleAttributes}]' \
+    >"${out}/identities.json" || note "identity list failed"
   zcli edge list services 'name="gateway"' -j | jq '[.data[]? | {id, name, roleAttributes, terminatorStrategy, createdAt}]' \
     >"${out}/gateway-service.json" || note "gateway service lookup failed"
   service_id="$(jq -r '.[0].id // empty' "${out}/gateway-service.json" 2>/dev/null)"

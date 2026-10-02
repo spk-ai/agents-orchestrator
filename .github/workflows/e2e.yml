@@ -9,7 +9,7 @@ on:
       k8s_runner_ref:
         description: k8s-runner ref to deploy from.
         required: false
-        default: 182d127011049d29b055e7ecae9f994a2d6b9f31
+        default: 13921ea6affc091054a0df9be50df9c5ee315ef7
       agents_ref:
         description: Agents ref to deploy from.
         required: false
@@ -50,7 +50,7 @@ on:
 # Init images are resolved to the newest published release by the run-tests
 # action. Pinning one here opts this workflow out of every fix shipped after it.
 env:
-  K8S_RUNNER_REF: 182d127011049d29b055e7ecae9f994a2d6b9f31
+  K8S_RUNNER_REF: 13921ea6affc091054a0df9be50df9c5ee315ef7
   AGENTS_REF: df88f90f6aee77647912e7336e03d43545a2a6a4
   AUTHORIZATION_REF: 30581ca4f834ad8a0a63e14bd0f465333b3929e9
   RUNNERS_REF: 31df7a2fb51736ff2c0e05968c39636808596db5
@@ -816,6 +816,19 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.k8s_runner_ref || env.K8S_RUNNER_REF }}
           path: .e2e-deps/k8s-runner
 
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.19.4
+
+      # The VM's platform release predates the chart's volume-backend grant and
+      # the source deployment is patched in place, so apply the pinned chart's
+      # own render, exactly as k8s-runner's E2E does. The script proves the only
+      # added permission is get on the single workload Namespace.
+      - name: Grant the source chart's volume-backend namespace read
+        working-directory: .e2e-deps/k8s-runner
+        run: python3 .github/e2e/volume-backend-rbac.py
+
       - name: Deploy k8s-runner from source
         working-directory: .e2e-deps/k8s-runner
         run: |-
@@ -1339,6 +1352,7 @@ jobs:
           kubectl logs "deployment/${deployment}" -n agyn-platform --all-containers --tail=500 >&2 || true
           exit 1
       - name: Deploy orchestrator from source
+        id: orchestrator_deploy
         run: devspace run deploy
 
       - name: Checkout e2e
@@ -1465,6 +1479,12 @@ jobs:
           e2e-ref: 435b549a937129b6858e7314648eb690894209fe
           service: agents_orchestrator
           include_smoke: "false"
+
+      # Evidence for the orchestrator's idle collection of the workloads it
+      # starts; the final Ziti snapshot below lists identities after this wait.
+      - name: Report orchestrator workload cleanup
+        if: ${{ always() && steps.orchestrator_deploy.outcome == 'success' }}
+        run: python3 .github/e2e/report-workload-cleanup.py
 
       - name: Print runtime diagnostics on failure
         if: failure()

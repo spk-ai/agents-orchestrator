@@ -136,8 +136,15 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		// carries its own platform version rather than a ref to build from.
 		"./.e2e-tooling/.github/actions/provision-vm",
 		"ref: 435b549a937129b6858e7314648eb690894209fe",
-		"K8S_RUNNER_REF: 182d127011049d29b055e7ecae9f994a2d6b9f31",
+		"K8S_RUNNER_REF: 13921ea6affc091054a0df9be50df9c5ee315ef7",
 		"github.event_name == 'workflow_dispatch' && inputs.k8s_runner_ref || env.K8S_RUNNER_REF",
+		// The source runner is patched in place over an older platform
+		// release, so the pinned chart's single-Namespace read is applied and
+		// proven by the runner's own fixture before it deploys.
+		"uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1",
+		"version: v3.19.4",
+		"run: python3 .github/e2e/volume-backend-rbac.py",
+		"run: python3 .github/e2e/report-workload-cleanup.py",
 		"name: Verify disposable VM native network inventory",
 		"python3 .github/e2e/verify-vm-network.py",
 		"WORKLOAD_TEST_DNS_SERVICE_IP",
@@ -163,6 +170,9 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		if !strings.Contains(e2eWorkflow, expected) {
 			t.Fatalf("expected E2E workflow to contain %q", expected)
 		}
+	}
+	if strings.Index(e2eWorkflow, "volume-backend-rbac.py") > strings.Index(e2eWorkflow, "name: Deploy k8s-runner from source") {
+		t.Fatal("expected the volume-backend grant to precede the k8s-runner source deployment")
 	}
 	for _, forbidden := range []string{
 		"K8S_RUNNER_REF: noa/issue-73",
