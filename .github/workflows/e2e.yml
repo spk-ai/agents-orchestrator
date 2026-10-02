@@ -1095,15 +1095,15 @@ jobs:
             kubectl get events -n agyn-platform --sort-by=.metadata.creationTimestamp >&2 || true
           }
           trap dump_gateway_source_diagnostics ERR
+          # The pinned gateway generates from the reviewed fork API itself; fail
+          # if that pin drifts rather than building against a different contract.
           python3 - <<'PYCODE'
           from pathlib import Path
-          p = Path('scripts/devspace-startup.sh')
-          s = p.read_text()
-          old = 'buf generate buf.build/agynio/api'
-          assert s.count(old) == 1, 'pinned gateway generation contract changed'
-          p.write_text(s.replace(old, 'buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto'))
+          gen = Path('buf.gen.yaml').read_text()
+          assert 'git_repo: https://github.com/spk-ai/api.git' in gen and 'ref: ce64da8680c39a13f7174c3146b38f3bfcc03037' in gen, 'pinned gateway generation contract changed'
+          assert 'buf generate --include-imports' in Path('scripts/devspace-startup.sh').read_text(), 'pinned gateway generation contract changed'
           PYCODE
-          buf generate https://github.com/spk-ai/api.git#ref=ce64da8680c39a13f7174c3146b38f3bfcc03037,subdir=proto
+          buf generate --include-imports
           CGO_ENABLED=0 go test ./cmd/gateway ./internal/identity ./internal/zitimgmtclient
           node <<'NODE'
           const fs = require('fs');
