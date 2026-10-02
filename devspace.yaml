@@ -174,8 +174,10 @@ functions:
     echo "Waiting for orchestrator source sync and process start..."
     ELAPSED=0
     LABEL_SELECTOR="app.kubernetes.io/name=agents-orchestrator"
-    until kubectl logs -n ${ORCHESTRATOR_NAMESPACE} -l "${LABEL_SELECTOR}" --tail=200 2>/dev/null | \
-      grep -q "orchestrator: ready"; do
+    # The whole log, drained so kubectl never sees SIGPIPE: Ziti SDK retries
+    # while the router lags a new identity can bury the line under any tail.
+    until kubectl logs -n ${ORCHESTRATOR_NAMESPACE} -l "${LABEL_SELECTOR}" --tail=-1 2>/dev/null | \
+      awk '/orchestrator: ready/ { found = 1 } END { exit !found }'; do
       sleep 5
       ELAPSED=$((ELAPSED + 5))
       if [ "$ELAPSED" -ge 1200 ]; then

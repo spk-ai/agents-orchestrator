@@ -166,7 +166,10 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		`E2E_GO_TEST_RUN: "^TestGatewayZitiNativeTransport$"`,
 		"bash .github/e2e/collect-ziti-diagnostics.sh",
 		"name: Verify llm-proxy Ziti service binding",
-		"llm-proxy listening on ziti service llm-proxy",
+		// The whole log, read before matching: bind retries during a router
+		// data-model lag bury the line under any tail, and an early grep exit
+		// SIGPIPEs kubectl under pipefail.
+		`grep -q 'llm-proxy listening on ziti service llm-proxy' "${RUNNER_TEMP}/llm-proxy.log"`,
 	} {
 		if !strings.Contains(e2eWorkflow, expected) {
 			t.Fatalf("expected E2E workflow to contain %q", expected)
@@ -188,6 +191,7 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		"kubectl patch networkpolicy",
 		"apply_workload_service_alias",
 		"grep -q 'gateway listening on ziti service gateway'",
+		"--tail=500 2>/dev/null | grep -q 'llm-proxy listening on ziti service llm-proxy'",
 	} {
 		if strings.Contains(e2eWorkflow, forbidden) {
 			t.Fatalf("expected E2E workflow not to contain %q", forbidden)

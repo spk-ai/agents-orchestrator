@@ -851,14 +851,18 @@ jobs:
           trap dump_k8s_runner_source_diagnostics ERR
           # While the router's data model lags a new identity, SDK bind retries
           # log thousands of lines a second and push the ready line out of a
-          # 200-line tail; the runner binds once the router catches up.
+          # 200-line tail; the runner binds once the router catches up. Read
+          # the whole log and drain it, so kubectl never sees SIGPIPE.
           python3 - <<'PYCODE'
           from pathlib import Path
           p = Path('devspace.yaml')
           s = p.read_text()
-          old = 'until kubectl logs -n ${K8S_RUNNER_NAMESPACE} -l "${LABEL_SELECTOR}" --tail=200 2>/dev/null'
+          old = ('until kubectl logs -n ${K8S_RUNNER_NAMESPACE} -l "${LABEL_SELECTOR}" --tail=200 2>/dev/null | \\\n'
+                 '      grep -q "gRPC server starting"; do')
           assert s.count(old) == 1, 'pinned k8s-runner ready-log contract changed'
-          p.write_text(s.replace(old, old.replace('--tail=200', '--tail=-1')))
+          new = old.replace('--tail=200', '--tail=-1').replace(
+              'grep -q "gRPC server starting"', "awk '/gRPC server starting/ { found = 1 } END { exit !found }'")
+          p.write_text(s.replace(old, new))
           PYCODE
           devspace run deploy
 
@@ -1348,7 +1352,11 @@ jobs:
           fi
           attempts=0
           while [ "${attempts}" -lt 120 ]; do
-            if kubectl logs "deployment/${deployment}" -n agyn-platform --all-containers --tail=500 2>/dev/null | grep -q 'llm-proxy listening on ziti service llm-proxy'; then
+            # The whole log, saved first so an early grep exit cannot SIGPIPE
+            # kubectl under pipefail: while the router's data model lags a new
+            # identity, SDK bind retries can bury the line under any fixed tail.
+            kubectl logs "deployment/${deployment}" -n agyn-platform --all-containers --tail=-1 >"${RUNNER_TEMP}/llm-proxy.log" 2>/dev/null || true
+            if grep -q 'llm-proxy listening on ziti service llm-proxy' "${RUNNER_TEMP}/llm-proxy.log"; then
               kubectl logs "deployment/${deployment}" -n agyn-platform --all-containers --tail=200
               exit 0
             fi
