@@ -871,6 +871,17 @@ jobs:
           new = old.replace('--tail=200', '--tail=-1').replace(
               'grep -q "gRPC server starting"', "awk '/gRPC server starting/ { found = 1 } END { exit !found }'")
           p.write_text(s.replace(old, new))
+          # The source run's catalog caps every sidecar, MCP servers included,
+          # at 256Mi. The suite's memory MCP is `npx -y supergateway` spawning
+          # `npx -y @modelcontextprotocol/server-memory`, whose installs are
+          # OOM-killed under that cap. Raise only the sidecar memory limit for
+          # this disposable VM; requests, CPU and the main container stay as
+          # pinned.
+          c = Path('catalog.dev.yaml')
+          cs = c.read_text()
+          cap = '    sidecarResources:\n      requestsCpu: "50m"\n      requestsMemory: "64Mi"\n      limitsCpu: "500m"\n      limitsMemory: "256Mi"\n'
+          assert cs.count(cap) == 2, 'pinned k8s-runner sidecar catalog contract changed'
+          c.write_text(cs.replace(cap, cap.replace('limitsMemory: "256Mi"', 'limitsMemory: "1Gi"')))
           PYCODE
           devspace run deploy
 
@@ -1528,6 +1539,12 @@ jobs:
           echo "== workload pods =="
           kubectl get pods -n agyn-workloads -o wide || true
           kubectl describe pods -n agyn-workloads || true
+          # Removed workloads leave only events: scheduling, OOM and pull
+          # history of every attempt, and the node's committed requests.
+          echo "== workload events =="
+          kubectl get events -n agyn-workloads --sort-by=.lastTimestamp || true
+          echo "== node allocation =="
+          kubectl describe nodes || true
           echo "== workload logs =="
           for pod in $(kubectl get pods -n agyn-workloads -o name 2>/dev/null || true); do
             echo "== ${pod} current logs =="

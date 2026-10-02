@@ -147,6 +147,11 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		// Prepared starts need the chart's workload ConfigMap and Secret rules.
 		"run: python3 .github/e2e/workload-rbac.py",
 		"pinned k8s-runner ready-log contract changed",
+		// The suite's npx-launched memory MCP is OOM-killed under the source
+		// catalog's 256Mi sidecar cap; only that limit is raised.
+		"pinned k8s-runner sidecar catalog contract changed",
+		`limitsMemory: "1Gi"`,
+		"kubectl get events -n agyn-workloads --sort-by=.lastTimestamp",
 		"run: python3 .github/e2e/report-workload-cleanup.py",
 		"name: Verify disposable VM native network inventory",
 		"python3 .github/e2e/verify-vm-network.py",

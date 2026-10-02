@@ -28,6 +28,12 @@ for (const [path, expected] of [
   [mainPath, 'if !senders.contains(msg.GetSenderId()) {'],
   ['suites/go-core/tests/threads_send_test.go', 'if !senders.contains(msg.GetSenderId()) {'],
   ['suites/go-core/tests/agent_agyn_wait_test.go', 'senders.contains(msg.GetSenderId()) && msg.GetBody() == body'],
+  // The testllm fixture shell-agyn-thread-create-wait replays a recorded
+  // `agyn threads create --add @e2e-agyn-wait-b-fixed --ref e2e-agyn-wait-fixed`
+  // call and compares its output, so these names must stay exactly as pinned.
+  ['suites/go-core/tests/agent_agyn_wait_test.go', 'agentBNickname := "e2e-agyn-wait-b-fixed"'],
+  ['suites/go-core/tests/agent_agyn_wait_test.go', 'uniqueRef := "e2e-agyn-wait-fixed"'],
+  ['suites/go-core/tests/agent_agyn_wait_test.go', 'sentinel := "e2e-agyn-wait-sentinel-fixed"'],
   ['suites/go-core/suite.yaml', 'if [ ! -d .gen/go/agynio/api ]; then'],
 ]) {
   if (!read(path).includes(expected)) throw new Error(`${path}: pinned native fixture contract changed`);
@@ -308,39 +314,6 @@ replace(
   ].join('\n'),
 );
 const mcpPath = 'suites/go-core/tests/mcp_test.go';
-
-
-
-const agynWaitPath = 'suites/go-core/tests/agent_agyn_wait_test.go';
-replace(
-  agynWaitPath,
-  'agyn wait unique nickname',
-  'agentBNickname := "e2e-agyn-wait-b-fixed"',
-  'agentBNickname := fmt.Sprintf("e2e-aw-b-%s", uuid.NewString()[:8])',
-);
-replace(
-  agynWaitPath,
-  'agyn wait unique ref',
-  'uniqueRef := "e2e-agyn-wait-fixed"',
-  'uniqueRef := fmt.Sprintf("e2e-aw-ref-%s", uuid.NewString()[:8])',
-);
-replace(
-  agynWaitPath,
-  'agyn wait unique sentinel',
-  'sentinel := "e2e-agyn-wait-sentinel-fixed"',
-  'sentinel := fmt.Sprintf("e2e-aw-sentinel-%s", uuid.NewString()[:8])',
-);
-
-
-
-
-
-
-
-
-
-
-
 
 
 
