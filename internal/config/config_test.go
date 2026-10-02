@@ -144,6 +144,7 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		"uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1",
 		"version: v3.19.4",
 		"run: python3 .github/e2e/volume-backend-rbac.py",
+		"pinned k8s-runner ready-log contract changed",
 		"run: python3 .github/e2e/report-workload-cleanup.py",
 		"name: Verify disposable VM native network inventory",
 		"python3 .github/e2e/verify-vm-network.py",
