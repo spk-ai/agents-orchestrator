@@ -5,10 +5,17 @@ Disposable VM only. Commands:
            NET_ADMIN Pod is refused by admission, and replace the chart's
            public-egress policy with the overlay-only task policy (DNS and the
            Ziti controller/router only; no ingress).
-  watch    wait for the first live orchestrator-assembled task Pod and run the
-           shape, privilege and network checks against it; results go to a
-           JSON file. Runs in the background while the focused tests drive
-           real agent turns.
+  watch    wait for a live orchestrator-assembled task Pod and run the shape,
+           privilege and network checks against it; results go to a JSON
+           file. Runs in the background while the focused tests drive real
+           agent turns (TestRestrictedTaskPodAnswersAndHolds keeps one Pod
+           alive for it).
+
+Whether the VM's CNI enforces NetworkPolicy is measured, not assumed: a
+canary Pod under the task policy tries a public address. Where policy is not
+enforced, the checks that only policy can satisfy (raw TCP, public DNS,
+cross-Pod ingress) are reported as skipped with that evidence; everything the
+Pod shape and the proxy themselves guarantee is still required.
   verify   wait for the watcher's result, print it and fail on any failure.
 
 No secret, token or environment value of a workload is printed: the Pod
@@ -32,6 +39,8 @@ RESTRICTED_LABELS = {
     'pod-security.kubernetes.io/warn': 'restricted',
     'pod-security.kubernetes.io/audit': 'restricted',
 }
+CANARY_POD = 'restricted-network-canary'
+POLICY_DEPENDENT = 'SKIPPED: this VM does not enforce NetworkPolicy (see the prepare step canary)'
 PROXY_ENV = ('HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy')
 
 
@@ -47,7 +56,7 @@ def get(*args):
 
 
 def pod_manifest(name, namespace, capabilities_add=None, restricted=True):
-    container = {'name': 'probe', 'image': 'busybox:1.37.0', 'command': ['sleep', '900']}
+    container = {'name': 'probe', 'image': 'busybox:1.37.0', 'command': ['sleep', '5400']}
     spec = {'restartPolicy': 'Never', 'containers': [container]}
     if restricted:
         spec['securityContext'] = {'runAsNonRoot': True, 'runAsUser': 65534, 'runAsGroup': 65534,
@@ -100,18 +109,50 @@ def prepare():
     print(f'agyn-workloads NetworkPolicies: {remaining}')
     assert 'task-overlay-egress' in remaining and 'agent-workload-egress' not in remaining
 
+    # The probe Pod outside the task namespace is created now, so the watcher
+    # does not spend a live task Pod's time waiting for it.
+    for name, namespace in ((PROBE_POD, PROBE_NAMESPACE), (CANARY_POD, NAMESPACE)):
+        kubectl('delete', 'pod', name, '-n', namespace, '--ignore-not-found', '--wait=true')
+        kubectl('apply', '-f', '-', stdin=pod_manifest(name, namespace))
+        kubectl('wait', f'pod/{name}', '-n', namespace, '--for=condition=Ready', '--timeout=180s')
+    enforced = False
+    for _ in range(6):
+        escaped = kubectl('exec', '-n', NAMESPACE, CANARY_POD, '--', 'sh', '-c', 'timeout 10 nc -w 5 1.1.1.1 443 </dev/null', check=False)
+        if escaped.returncode != 0:
+            enforced = True
+            break
+        time.sleep(10)
+    lima = subprocess.run(['limactl', 'shell', 'agyn', '--', 'sudo', 'sh', '-c', 'iptables-save 2>/dev/null | grep -c KUBE-NWPLCY || true'],
+                          env={**os.environ, 'LIMA_HOME': str(Path.home() / '.agyn/local/lima')}, capture_output=True, text=True, timeout=60)
+    print(f'NetworkPolicy enforced for the canary: {enforced}; kube-router policy chains on the node: {lima.stdout.strip() or lima.stderr.strip()[:200]}')
+    if not enforced:
+        print('::warning::The disposable VM does not enforce NetworkPolicy: a Pod under task-overlay-egress reached 1.1.1.1:443. '
+              'Raw-TCP, public-DNS and cross-Pod ingress negatives are reported as skipped here and need the live probe.')
+    kubectl('delete', 'pod', CANARY_POD, '-n', NAMESPACE, '--wait=false')
+    with Path(os.environ['GITHUB_ENV']).open('a') as env:
+        env.write(f'NETWORK_POLICY_ENFORCED={"true" if enforced else "false"}\n')
+
 
 def sh(pod, container, script, timeout=60):
     return kubectl('exec', '-n', NAMESPACE, pod, '-c', container, '--', 'sh', '-c', script, check=False, timeout=timeout)
 
 
 class Checks:
-    def __init__(self):
+    def __init__(self, enforced):
         self.results = []
+        self.enforced = enforced
 
     def record(self, name, ok, detail=''):
         self.results.append({'check': name, 'ok': bool(ok), 'detail': str(detail)[:400]})
         print(f'{"PASS" if ok else "FAIL"} {name}: {str(detail)[:200]}', flush=True)
+
+    def policy(self, name, ok, detail=''):
+        """A check only an enforced NetworkPolicy can satisfy."""
+        if self.enforced:
+            self.record(name, ok, detail)
+            return
+        self.results.append({'check': name, 'ok': True, 'skipped': True, 'detail': f'{POLICY_DEPENDENT}; observed: {str(detail)[:200]}'})
+        print(f'SKIP {name}: {POLICY_DEPENDENT}', flush=True)
 
 
 def env_of(container):
@@ -151,6 +192,14 @@ def connect(pod, authority):
     return sh(pod, 'ziti-sidecar', f"printf '{request}' | timeout 15 nc -w 10 127.0.0.1 18080 | head -c 600").stdout
 
 
+def gateway_reachable(pod):
+    """Control: the Pod's identity can still reach the gateway through the
+    proxy. Run first and last, so checks against a Pod whose agent is being
+    deleted are discarded rather than reported."""
+    answer = connect(pod, 'gateway.agyn:443')
+    return ' 200 ' in (answer.splitlines() or [''])[0], answer.splitlines()[:3]
+
+
 def network_checks(checks, pod, pod_ip, cluster_ips):
     out = sh(pod, 'ziti-sidecar', 'id -u; grep CapEff /proc/self/status').stdout.split()
     checks.record('overlay sidecar runs as 10001 with no effective capability', out[:1] == ['10001'] and '0000000000000000' in out, out)
@@ -163,18 +212,16 @@ def network_checks(checks, pod, pod_ip, cluster_ips):
     for name, target in [('public internet', '1.1.1.1 443'), ('kubernetes API', f'{cluster_ips["kubernetes"]} 443'),
                          ('platform service', f'{cluster_ips["agents"]} 50051')]:
         raw = sh(pod, 'ziti-sidecar', f'timeout 10 nc -w 5 {target} </dev/null')
-        checks.record(f'raw TCP to {name} is blocked', raw.returncode != 0, (raw.stderr or raw.stdout).strip())
+        checks.policy(f'raw TCP to {name} is blocked', raw.returncode != 0, (raw.stderr or raw.stdout).strip()[:80])
     external_dns = sh(pod, 'ziti-sidecar', 'timeout 10 nslookup example.com 1.1.1.1')
-    checks.record('DNS to a public resolver is blocked', external_dns.returncode != 0, external_dns.stdout.strip()[-120:])
+    checks.policy('DNS to a public resolver is blocked', external_dns.returncode != 0, external_dns.stdout.strip()[-120:])
     for authority in ('unrouted.example.org:443', '1.1.1.1:443', 'agyn-tripwire.invalid:443'):
         answer = connect(pod, authority)
         first = (answer.splitlines() or [''])[0]
         checks.record(f'proxy refuses CONNECT {authority} as destination_not_found',
-                      ' 502 ' in first and 'destination_not_found' in answer, answer.splitlines()[:3])
+                      ' 502 ' in first and 'destination_not_found' in answer, answer.splitlines()[:6])
     plain = sh(pod, 'ziti-sidecar', "printf 'GET http://unrouted.example.org/ HTTP/1.1\\r\\nHost: unrouted.example.org\\r\\nConnection: close\\r\\n\\r\\n' | timeout 15 nc -w 10 127.0.0.1 18080 | head -c 600").stdout
     checks.record('proxy refuses plain HTTP to an unknown host', ' 502 ' in (plain.splitlines() or [''])[0] and 'destination_not_found' in plain, plain.splitlines()[:3])
-    gateway = connect(pod, 'gateway.agyn:443')
-    checks.record('control: proxy tunnels to the gateway overlay service', ' 200 ' in (gateway.splitlines() or [''])[0], gateway.splitlines()[:1])
     loop = sh(pod, 'ziti-sidecar', f'timeout 10 nc -w 5 {pod_ip} 18080 </dev/null')
     checks.record('proxy listener is not bound to the Pod IP', loop.returncode != 0, (loop.stderr or loop.stdout).strip())
 
@@ -191,9 +238,13 @@ def cross_pod_checks(checks, pod, pod_ip):
         inside = sh(pod, 'ziti-sidecar', f'timeout 10 nc -w 5 {pod_ip} 18999 </dev/null')
         checks.record('control: a wildcard listener answers on the Pod IP from inside', inside.returncode == 0, inside.stderr.strip())
         time.sleep(1)
-        for port, what in ((18999, 'a wildcard listener'), (18080, 'the proxy port')):
-            probe = kubectl('exec', '-n', PROBE_NAMESPACE, PROBE_POD, '--', 'sh', '-c', f'timeout 10 nc -w 5 {pod_ip} {port} </dev/null', check=False)
-            checks.record(f'another Pod cannot reach {what} in the task Pod', probe.returncode != 0, (probe.stderr or probe.stdout).strip())
+        # The proxy port is unreachable from outside because it is bound to
+        # loopback, which holds with or without an enforced policy; the
+        # wildcard listener is unreachable only through the ingress deny.
+        probe = kubectl('exec', '-n', PROBE_NAMESPACE, PROBE_POD, '--', 'sh', '-c', f'timeout 10 nc -w 5 {pod_ip} 18080 </dev/null', check=False)
+        checks.record('another Pod cannot reach the proxy port in the task Pod', probe.returncode != 0, (probe.stderr or probe.stdout).strip())
+        probe = kubectl('exec', '-n', PROBE_NAMESPACE, PROBE_POD, '--', 'sh', '-c', f'timeout 10 nc -w 5 {pod_ip} 18999 </dev/null', check=False)
+        checks.policy('another Pod cannot reach a wildcard listener in the task Pod', probe.returncode != 0, (probe.stderr or probe.stdout).strip())
         control = kubectl('exec', '-n', PROBE_NAMESPACE, PROBE_POD, '--', 'sh', '-c', 'timeout 10 nslookup kubernetes.default.svc.cluster.local', check=False)
         checks.record('control: the probe Pod has a working network', control.returncode == 0, control.stdout.strip()[-120:])
     finally:
@@ -214,21 +265,32 @@ def task_pods():
 
 def watch():
     RESULT.unlink(missing_ok=True)
-    kubectl('delete', 'pod', PROBE_POD, '-n', PROBE_NAMESPACE, '--ignore-not-found', '--wait=true')
-    kubectl('apply', '-f', '-', stdin=pod_manifest(PROBE_POD, PROBE_NAMESPACE))
-    kubectl('wait', f'pod/{PROBE_POD}', '-n', PROBE_NAMESPACE, '--for=condition=Ready', '--timeout=180s')
+    enforced = os.environ.get('NETWORK_POLICY_ENFORCED') == 'true'
     cluster_ips = {'kubernetes': get('service', 'kubernetes', '-n', 'default')['spec']['clusterIP'],
                    'agents': get('service', 'agents', '-n', 'agyn-platform')['spec']['clusterIP']}
     deadline = time.time() + 60 * 60
     attempts = []
+    tried = set()
     while time.time() < deadline:
         for pod in task_pods():
             name = pod['metadata']['name']
-            checks = Checks()
+            if name in tried:
+                continue
+            tried.add(name)
+            checks = Checks(enforced)
             try:
+                before, detail = gateway_reachable(name)
+                if not before:
+                    attempts.append({'pod': name, 'error': f'gateway control failed before checks: {detail}'})
+                    continue
                 shape_checks(checks, pod)
                 network_checks(checks, name, pod['status']['podIP'], cluster_ips)
                 cross_pod_checks(checks, name, pod['status']['podIP'])
+                after, detail = gateway_reachable(name)
+                if not after:
+                    attempts.append({'pod': name, 'error': f'gateway control failed after checks (agent torn down?): {detail}'})
+                    continue
+                checks.record('control: proxy tunnels to the gateway overlay service before and after', True, detail)
             except Exception as error:  # the Pod may have gone mid-check
                 attempts.append({'pod': name, 'error': str(error)[:300]})
                 continue
@@ -253,6 +315,8 @@ def verify():
     failed = [r for r in result['results'] if not r['ok']]
     if not result['results']:
         sys.exit('no live explicit-proxy task Pod was checked')
+    for skipped in [r for r in result['results'] if r.get('skipped')]:
+        print(f'::warning::{skipped["check"]}: {skipped["detail"]}')
     if failed:
         sys.exit(f'{len(failed)} restricted network checks failed on {result["pod"]}')
     print(f'all {len(result["results"])} restricted network checks passed on {result["pod"]}')

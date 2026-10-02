@@ -9,7 +9,7 @@ on:
       k8s_runner_ref:
         description: k8s-runner ref to deploy from.
         required: false
-        default: 7f6146a1dab71775c0d8ff91f8a313425fac5a4b
+        default: 1796887dcaeff085dab1cb8e59c4a85927fd7dd3
       agents_ref:
         description: Agents ref to deploy from.
         required: false
@@ -50,7 +50,7 @@ on:
 # Init images are resolved to the newest published release by the run-tests
 # action. Pinning one here opts this workflow out of every fix shipped after it.
 env:
-  K8S_RUNNER_REF: 7f6146a1dab71775c0d8ff91f8a313425fac5a4b
+  K8S_RUNNER_REF: 1796887dcaeff085dab1cb8e59c4a85927fd7dd3
   AGENTS_REF: df88f90f6aee77647912e7336e03d43545a2a6a4
   AUTHORIZATION_REF: 30581ca4f834ad8a0a63e14bd0f465333b3929e9
   RUNNERS_REF: 31df7a2fb51736ff2c0e05968c39636808596db5
@@ -89,7 +89,7 @@ jobs:
             focused: "TestAgentAgynCLIWaitToAnotherAgent|TestMCPToolsE2E|TestWorkloadStartRetryPolicyFastRetry"
           - network: explicit-proxy
             runner_pod_security: "WORKLOAD_POD_SECURITY=restricted WORKLOAD_ALLOWED_CAPABILITIES="
-            focused: "TestAgentAgynCLIWaitToAnotherAgent|TestWorkloadStartRetryPolicyFastRetry|TestRestrictedRunnerRefusesNetAdmin"
+            focused: "TestAgentAgynCLIWaitToAnotherAgent|TestWorkloadStartRetryPolicyFastRetry|TestRestrictedRunnerRefusesNetAdmin|TestRestrictedTaskPodAnswersAndHolds"
     steps:
       - name: Checkout service
         uses: actions/checkout@v4
@@ -904,9 +904,10 @@ jobs:
           s = p.read_text()
           old = ('until kubectl logs -n ${K8S_RUNNER_NAMESPACE} -l "${LABEL_SELECTOR}" --tail=200 2>/dev/null | \\\n'
                  '      grep -q "gRPC server starting"; do')
-          assert s.count(old) == 1, 'pinned k8s-runner ready-log contract changed'
           new = old.replace('--tail=200', '--tail=-1').replace(
               'grep -q "gRPC server starting"', "awk '/gRPC server starting/ { found = 1 } END { exit !found }'")
+          # The pinned runner already drains the whole log itself.
+          assert s.count(old) + s.count(new) == 1, 'pinned k8s-runner ready-log contract changed'
           p.write_text(s.replace(old, new))
           # Two fits for this disposable VM's catalog; every other value stays
           # as pinned.

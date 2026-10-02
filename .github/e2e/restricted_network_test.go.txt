@@ -4,14 +4,23 @@ package tests
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	agentsv1 "github.com/agynio/e2e/suites/go-core/.gen/go/agynio/api/agents/v1"
+	llmv1 "github.com/agynio/e2e/suites/go-core/.gen/go/agynio/api/llm/v1"
 	runnerv1 "github.com/agynio/e2e/suites/go-core/.gen/go/agynio/api/runner/v1"
+	threadsv1 "github.com/agynio/e2e/suites/go-core/.gen/go/agynio/api/threads/v1"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// restrictedHoldWindow keeps one answered task Pod alive for the host-side
+// watcher (.github/e2e/restricted-network.py), which checks its shape,
+// privileges and network from outside the suite.
+const restrictedHoldWindow = 5 * time.Minute
 
 // Injected only into the explicit-proxy E2E leg, whose runner builds
 // restricted Pods with an empty capability allowlist. A caller asking the
@@ -41,4 +50,49 @@ func TestRestrictedRunnerRefusesNetAdmin(t *testing.T) {
 		t.Fatalf("refused workload %s must not exist: %v", workloadID, err)
 	}
 	t.Logf("runner refused NET_ADMIN for %s and created nothing", workloadID)
+}
+
+// One real turn through the explicit-proxy overlay under restricted Pod
+// Security, then the Pod is held -- the agent is not deleted -- so the
+// watcher checks a live, enrolled Pod rather than one being torn down.
+func TestRestrictedTaskPodAnswersAndHolds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), responseWaitTimeout+restrictedHoldWindow+5*time.Minute)
+	defer cancel()
+	agentsClient := agentsv1.NewAgentsServiceClient(dialGRPC(t, agentsAddr))
+	threadsClient := threadsv1.NewThreadsServiceClient(dialGRPC(t, threadsAddr))
+	runnerClient := runnerv1.NewRunnerServiceClient(dialRunnerGRPC(t, runnerAddr))
+	setup := newWorkflowGatewaySetup(t, ctx)
+	orgID := setup.OrganizationID
+	modelID := createWorkflowGatewayModel(t, setup, testLLMEndpointCodex, llmv1.Protocol_PROTOCOL_RESPONSES, "simple-hello")
+	environmentID := newSuiteEnvironment(t, setup.Context, agentsClient, orgID, codexRuntime, "alpine:3.21")
+	name := fmt.Sprintf("e2e-restricted-hold-%s", uuid.NewString())
+	agent := createAgentWithOptions(t, setup.Context, agentsClient, agentCreateOptions{
+		Name: name, Nickname: nicknameFor(name), Model: modelID, OrganizationID: orgID, EnvironmentID: environmentID,
+	})
+	agentID := agent.GetMeta().GetId()
+	t.Cleanup(func() {
+		cleanupAgentEnvs(t, setup.Context, agentsClient, orgID, agentID)
+		deleteAgent(t, setup.Context, agentsClient, orgID, agentID)
+	})
+	createAgentEnv(t, setup.Context, agentsClient, agentID, "LLM_API_TOKEN", setup.Token)
+	thread := createThread(t, setup.Context, threadsClient, orgID, []string{setup.IdentityID, agentID})
+	threadID := thread.GetId()
+	t.Cleanup(func() { archiveThread(t, setup.Context, threadsClient, threadID) })
+	labels := map[string]string{labelManagedBy: managedByValue, labelAgentID: agentID, labelThreadID: threadID}
+	sent := sendMessage(t, setup.Context, threadsClient, threadID, setup.IdentityID, "hello")
+	responseCtx, responseCancel := context.WithTimeout(ctx, responseWaitTimeout)
+	defer responseCancel()
+	body, err := pollForAgentResponse(t, responseCtx, threadsClient, runnerClient, orgID, threadID, agentID, labels, messageCreatedAt(t, sent), expectedAgentResponse)
+	if err != nil || body != expectedAgentResponse {
+		t.Fatalf("restricted task Pod did not answer: %q %v", body, err)
+	}
+	ids, err := findWorkloadsByLabels(ctx, runnerClient, labels)
+	if err != nil || len(ids) == 0 {
+		t.Fatalf("answered, but its workload is not listed: %v", err)
+	}
+	t.Logf("agent %s answered through workload %v; holding %s for the restricted network watcher", agentID, ids, restrictedHoldWindow)
+	select {
+	case <-time.After(restrictedHoldWindow):
+	case <-ctx.Done():
+	}
 }

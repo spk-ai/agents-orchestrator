@@ -136,7 +136,7 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		// carries its own platform version rather than a ref to build from.
 		"./.e2e-tooling/.github/actions/provision-vm",
 		"ref: 435b549a937129b6858e7314648eb690894209fe",
-		"K8S_RUNNER_REF: 7f6146a1dab71775c0d8ff91f8a313425fac5a4b",
+		"K8S_RUNNER_REF: 1796887dcaeff085dab1cb8e59c4a85927fd7dd3",
 		// The explicit-proxy leg: the runner's own workload-proxy image,
 		// restricted admission and the overlay-only task policy, real agent
 		// turns, a direct NET_ADMIN refusal and the live Pod negatives.
@@ -150,6 +150,7 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		"python3 .github/e2e/restricted-network.py verify",
 		"cp ../.github/e2e/restricted_network_test.go.txt suites/go-core/tests/restricted_network_test.go",
 		"TestRestrictedRunnerRefusesNetAdmin",
+		"TestRestrictedTaskPodAnswersAndHolds",
 		"name: ziti-diagnostics-${{ matrix.network }}",
 		"github.event_name == 'workflow_dispatch' && inputs.k8s_runner_ref || env.K8S_RUNNER_REF",
 		// The source runner is patched in place over an older platform
