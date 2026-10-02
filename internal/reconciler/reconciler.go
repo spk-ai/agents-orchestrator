@@ -24,17 +24,22 @@ const (
 )
 
 type Reconciler struct {
-	threads                   threadsv1.ThreadsServiceClient
-	agents                    agentsClient
-	runnerDialer              runnerdial.RunnerDialer
-	runners                   runnersClient
-	metering                  meteringv1.MeteringServiceClient
-	meteringSampleInterval    time.Duration
-	zitiMgmt                  zitimgmtv1.ZitiManagementServiceClient
-	groups                    groupsClient
-	assembler                 *assembler.Assembler
-	wake                      <-chan struct{}
-	sandboxWake               <-chan struct{}
+	threads                threadsv1.ThreadsServiceClient
+	agents                 agentsClient
+	runnerDialer           runnerdial.RunnerDialer
+	runners                runnersClient
+	metering               meteringv1.MeteringServiceClient
+	meteringSampleInterval time.Duration
+	zitiMgmt               zitimgmtv1.ZitiManagementServiceClient
+	groups                 groupsClient
+	assembler              *assembler.Assembler
+	wake                   <-chan struct{}
+	sandboxWake            <-chan struct{}
+	// removalConfirmed wakes the start decision when a prepared workload's
+	// removal is confirmed. Replacement waits for that confirmation, which the
+	// workload loop usually records on its own tick, so without this the
+	// replacement also waits out the rest of a poll interval.
+	removalConfirmed          chan struct{}
 	poll                      time.Duration
 	workloadReconcileInterval time.Duration
 	idle                      time.Duration
@@ -89,6 +94,7 @@ func New(cfg Config) *Reconciler {
 		assembler:                 cfg.Assembler,
 		wake:                      cfg.Wake,
 		sandboxWake:               cfg.SandboxWake,
+		removalConfirmed:          make(chan struct{}, 1),
 		poll:                      cfg.Poll,
 		workloadReconcileInterval: cfg.WorkloadReconcileInterval,
 		idle:                      cfg.Idle,
@@ -121,9 +127,23 @@ func (r *Reconciler) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-r.wake:
 			r.runCycle(ctx)
+		case <-r.removalConfirmed:
+			r.runCycle(ctx)
 		case <-ticker.C:
 			r.runCycle(ctx)
 		}
+	}
+}
+
+// signalRemovalConfirmed asks for one more reconcile cycle without blocking;
+// a pending request already covers this one.
+func (r *Reconciler) signalRemovalConfirmed() {
+	if r.removalConfirmed == nil {
+		return
+	}
+	select {
+	case r.removalConfirmed <- struct{}{}:
+	default:
 	}
 }
 
