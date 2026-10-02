@@ -871,17 +871,29 @@ jobs:
           new = old.replace('--tail=200', '--tail=-1').replace(
               'grep -q "gRPC server starting"', "awk '/gRPC server starting/ { found = 1 } END { exit !found }'")
           p.write_text(s.replace(old, new))
-          # The source run's catalog caps every sidecar, MCP servers included,
-          # at 256Mi. The suite's memory MCP is `npx -y supergateway` spawning
-          # `npx -y @modelcontextprotocol/server-memory`, whose installs are
-          # OOM-killed under that cap. Raise only the sidecar memory limit for
-          # this disposable VM; requests, CPU and the main container stay as
-          # pinned.
+          # Two fits for this disposable VM's catalog; every other value stays
+          # as pinned.
+          # - The catalog caps every sidecar, MCP servers included, at 500m and
+          #   256Mi. The suite's memory MCP is stateless `npx -y supergateway`
+          #   spawning `npx -y @modelcontextprotocol/server-memory` per request.
+          #   Under 256Mi the install is OOM-killed; under 500m it outlasts
+          #   agynd's fixed 10s readiness request, and supergateway 3.4.3 then
+          #   exits on the late reply ("No connection established for request
+          #   ID: agynd-mcp-ready"). Sidecars get the main container's 2 CPUs
+          #   and 1Gi, still a budget of their own.
+          # - The source-run services already reserve ~3.1 of the VM's 4 CPUs,
+          #   so a 500m default-flavor request admits one workload pod at a
+          #   time ("Insufficient cpu"). Agent-to-agent tests need two at
+          #   once and the start-retry test waits on the previous test's pod,
+          #   so the default flavor reserves 100m; its 2-CPU limit is unchanged.
           c = Path('catalog.dev.yaml')
           cs = c.read_text()
           cap = '    sidecarResources:\n      requestsCpu: "50m"\n      requestsMemory: "64Mi"\n      limitsCpu: "500m"\n      limitsMemory: "256Mi"\n'
           assert cs.count(cap) == 2, 'pinned k8s-runner sidecar catalog contract changed'
-          c.write_text(cs.replace(cap, cap.replace('limitsMemory: "256Mi"', 'limitsMemory: "1Gi"')))
+          cs = cs.replace(cap, cap.replace('limitsCpu: "500m"', 'limitsCpu: "2"').replace('limitsMemory: "256Mi"', 'limitsMemory: "1Gi"'))
+          reserve = '  - name: ram-2gb\n    default: true\n    resources:\n      requestsCpu: "500m"\n'
+          assert cs.count(reserve) == 1, 'pinned k8s-runner default flavor contract changed'
+          c.write_text(cs.replace(reserve, reserve.replace('requestsCpu: "500m"', 'requestsCpu: "100m"')))
           PYCODE
           devspace run deploy
 
