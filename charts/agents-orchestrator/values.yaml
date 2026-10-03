@@ -131,7 +131,11 @@ env:
   # image digest; WORKLOAD_PROXY_ENTRYPOINT defaults to /app/workload-proxy).
   # The workload then reaches the gateway, llm-proxy and tracing through fixed
   # loopback forwards (127.0.0.1:18443/18081/18444) and everything else through
-  # HTTP(S)_PROXY=http://127.0.0.1:18080; unknown destinations fail closed.
+  # HTTP(S)_PROXY=http://127.0.0.1:18080; unknown destinations fail closed
+  # unless WORKLOAD_PROXY_DIRECT_EGRESS=true, which dials them directly to
+  # public addresses only (WORKLOAD_PROXY_DIRECT_DENY: extra comma-separated
+  # addresses/CIDRs, e.g. the node's public IP); the task NetworkPolicy must
+  # then allow internet egress too.
   # The ZITI_*_RESOLVE_HOST/PORT and DNS upstream settings below are tproxy-only.
   - name: ZITI_MANAGEMENT_ADDRESS
     value: "ziti-management:50051"

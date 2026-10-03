@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -92,6 +93,11 @@ type Config struct {
 	// workload-proxy (enroll, serve, wait) in explicit-proxy mode.
 	WorkloadProxyImage      string
 	WorkloadProxyEntrypoint string
+	// WorkloadProxyDirectEgress lets explicit-proxy workloads reach public
+	// internet addresses no egress rule intercepts (serve --direct-egress);
+	// WorkloadProxyDirectDeny adds addresses or CIDRs it must never reach.
+	WorkloadProxyDirectEgress bool
+	WorkloadProxyDirectDeny   []string
 }
 
 func FromEnv() (Config, error) {
@@ -249,8 +255,32 @@ func FromEnv() (Config, error) {
 	if cfg.WorkloadProxyEntrypoint == "" {
 		cfg.WorkloadProxyEntrypoint = defaultWorkloadProxyEntrypoint
 	}
+	if raw := strings.TrimSpace(os.Getenv("WORKLOAD_PROXY_DIRECT_EGRESS")); raw != "" {
+		enabled, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("WORKLOAD_PROXY_DIRECT_EGRESS must be a boolean")
+		}
+		cfg.WorkloadProxyDirectEgress = enabled
+	}
+	for _, value := range strings.Split(os.Getenv("WORKLOAD_PROXY_DIRECT_DENY"), ",") {
+		if value = strings.TrimSpace(value); value == "" {
+			continue
+		}
+		if _, err := netip.ParsePrefix(value); err != nil {
+			if _, err := netip.ParseAddr(value); err != nil {
+				return Config{}, fmt.Errorf("WORKLOAD_PROXY_DIRECT_DENY entry %q is not an address or CIDR", value)
+			}
+		}
+		cfg.WorkloadProxyDirectDeny = append(cfg.WorkloadProxyDirectDeny, value)
+	}
+	if len(cfg.WorkloadProxyDirectDeny) > 0 && !cfg.WorkloadProxyDirectEgress {
+		return Config{}, fmt.Errorf("WORKLOAD_PROXY_DIRECT_DENY requires WORKLOAD_PROXY_DIRECT_EGRESS=true")
+	}
 	switch cfg.WorkloadNetworkMode {
 	case WorkloadNetworkModeTProxy:
+		if cfg.WorkloadProxyDirectEgress {
+			return Config{}, fmt.Errorf("WORKLOAD_PROXY_DIRECT_EGRESS requires WORKLOAD_NETWORK_MODE=explicit-proxy")
+		}
 	case WorkloadNetworkModeExplicitProxy:
 		// Fail here rather than assemble a Pod with no overlay at all, or one
 		// that silently falls back to the privileged tunneler.
