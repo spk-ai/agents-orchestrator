@@ -18,6 +18,12 @@ import (
 // once when retention is enabled without an explicit limit.
 const DefaultFailedWorkloadRetentionMax = 1
 
+// retainedPodInspectInterval spaces re-inspections of a retained Pod: both
+// reconcile loops visit it every tick, and each inspection costs the runner
+// rate-limited Kubernetes reads. An operator deleting the Pod is noticed
+// within this interval.
+const retainedPodInspectInterval = 30 * time.Second
+
 // FailedWorkloadConfig controls what happens to a failed workload's Pod
 // before removal. Retention 0 removes failed workloads as soon as they are
 // judged failed, which was the only behaviour before retention existed.
@@ -52,6 +58,7 @@ type failedWorkloads struct {
 
 	mu        sync.Mutex
 	held      map[string]time.Time
+	inspected map[string]time.Time
 	firstSeen map[string]time.Time
 	released  map[string]string
 	reported  map[string]bool
@@ -77,6 +84,7 @@ func newFailedWorkloads(cfg FailedWorkloadConfig) *failedWorkloads {
 		evidenceLogBytes: cfg.EvidenceLogBytes,
 		now:              time.Now,
 		held:             map[string]time.Time{},
+		inspected:        map[string]time.Time{},
 		firstSeen:        map[string]time.Time{},
 		released:         map[string]string{},
 		reported:         map[string]bool{},
@@ -144,6 +152,28 @@ func (f *failedWorkloads) decide(workloadID string, eligible bool, failedAt time
 	log.Printf("reconciler: retaining failed workload %s Pod until %s for investigation; its capacity stays reserved and its agent instance is not restarted until then",
 		workloadID, until.UTC().Format(time.RFC3339))
 	return true
+}
+
+// recentlyInspected reports whether a retained Pod was inspected within
+// retainedPodInspectInterval; markInspected records an inspection.
+func (f *failedWorkloads) recentlyInspected(workloadID string) bool {
+	if f == nil {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	at, ok := f.inspected[workloadID]
+	_, held := f.held[workloadID]
+	return ok && held && f.now().Sub(at) < retainedPodInspectInterval
+}
+
+func (f *failedWorkloads) markInspected(workloadID string) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inspected[workloadID] = f.now()
 }
 
 func (f *failedWorkloads) isHeld(workloadID string) bool {
@@ -218,6 +248,7 @@ func (f *failedWorkloads) forget(workloadID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.held, workloadID)
+	delete(f.inspected, workloadID)
 	delete(f.firstSeen, workloadID)
 	delete(f.released, workloadID)
 	delete(f.reported, workloadID)
@@ -263,8 +294,13 @@ func (r *Reconciler) observeFailedPod(ctx context.Context, runner runnerv1.Runne
 // proceed. It reports true while the Pod is retained, or while another loop
 // is still capturing its evidence.
 func (r *Reconciler) holdFailedWorkload(ctx context.Context, runner runnerv1.RunnerServiceClient, w *runnersv1.Workload) bool {
+	reasonMissing := w.FailureReason == nil || w.GetFailureReason() == runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_UNSPECIFIED
+	if !reasonMissing && r.failures.recentlyInspected(w.Meta.Id) && r.failures.decide(w.Meta.Id, true, workloadFailedAt(w)) {
+		return true
+	}
 	observation := r.observeFailedPod(ctx, runner, w)
-	if w.FailureReason == nil || w.GetFailureReason() == runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_UNSPECIFIED {
+	r.failures.markInspected(w.Meta.Id)
+	if reasonMissing {
 		failure := diagnoseFailedContainers("runner reported the Pod failed", observation.containers)
 		if observation.containers == nil {
 			failure = diagnoseFailedContainers("runner reported the Pod failed", w.GetContainers())

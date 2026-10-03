@@ -307,8 +307,14 @@ func TestDeletingARetainedPodEndsRetention(t *testing.T) {
 	if err := f.stop(); err != nil || f.removals != 0 {
 		t.Fatalf("not retained: %v", err)
 	}
-	// An operator who is done investigating deletes the Pod.
+	// An operator who is done investigating deletes the Pod. A retained Pod
+	// is re-inspected at most every retainedPodInspectInterval.
 	f.binding = nil
+	inspections := f.inspections
+	if err := f.stop(); err != nil || f.inspections != inspections || f.record().RemovalConfirmedAt != nil {
+		t.Fatalf("retained Pod re-inspected too early: %v", err)
+	}
+	f.clock.now = f.clock.now.Add(retainedPodInspectInterval)
 	if err := f.stop(); err != nil {
 		t.Fatal(err)
 	}

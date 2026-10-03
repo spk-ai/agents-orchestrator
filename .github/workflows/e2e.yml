@@ -1642,7 +1642,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |-
           kubectl logs -n agyn-platform -l app.kubernetes.io/name=agents-orchestrator --tail=-1 |
-            grep -E 'retain|failure evidence|failed \(WORKLOAD_FAILURE_REASON' || true
+            grep -E 'retain|retention|failure evidence|failed \(WORKLOAD_FAILURE_REASON' || true
 
       - name: Print runtime diagnostics on failure
         if: failure()

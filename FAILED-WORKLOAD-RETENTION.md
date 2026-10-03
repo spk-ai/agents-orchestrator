@@ -43,15 +43,19 @@ startup the orchestrator logs
   written by older versions are removed as before.
 
 Release a Pod early by deleting it, for example
-`kubectl delete pod -n agyn-workloads workload-<workload-id>`. On its next
-tick the orchestrator confirms the removal. It keeps the evidence stored when
+`kubectl delete pod -n agyn-workloads workload-<workload-id>`. A retained Pod
+is re-inspected at most every 30 seconds, so the orchestrator confirms the
+removal within about that time. It keeps the evidence stored when
 retention started, because a Pod that can no longer be read never overwrites
 stored evidence. Do not edit the workload record.
 
 ## Reading the evidence
 
 Read the record with `GetWorkload`, through the Gateway (`RunnersGateway`) or,
-inside the cluster, through Runners:
+inside the cluster, through Runners. A Gateway built against an API older than
+this field passes `output_tail` through to binary (gRPC or Connect protobuf)
+clients as an unknown field, but drops it for JSON clients until its API pin
+moves to the revision that declares it.
 
 - `failure_reason` and `failure_message` name the failed check and the
   container. Examples are `start check: main container "main" could not be
