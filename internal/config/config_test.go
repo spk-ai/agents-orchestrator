@@ -137,7 +137,7 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		"./.e2e-tooling/.github/actions/provision-vm",
 		"ref: 435b549a937129b6858e7314648eb690894209fe",
 		// The runner serving bounded TailWorkloadLogs for failure evidence.
-		"K8S_RUNNER_REF: 378675d8aa5aecdc23cbc6fcb285bee85c606ecc",
+		"K8S_RUNNER_REF: c0231bbfaf2260d03267e8da3b66181fdb1895d0",
 		// The explicit-proxy leg: the runner's own workload-proxy image,
 		// restricted admission and the overlay-only task policy, real agent
 		// turns, a direct NET_ADMIN refusal and the live Pod negatives.

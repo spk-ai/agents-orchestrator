@@ -356,6 +356,31 @@ func TestRunnerWithoutLogTailsRecordsWhy(t *testing.T) {
 	}
 }
 
+// Slow log reads spend their own budget, never the write that stores the
+// evidence: what was read, and why the rest was not, is still stored.
+func TestSlowLogReadsStillStoreEvidence(t *testing.T) {
+	budget, call := evidenceReadBudget, evidenceCallLimit
+	evidenceReadBudget, evidenceCallLimit = 50*time.Millisecond, 5*time.Second
+	t.Cleanup(func() { evidenceReadBudget, evidenceCallLimit = budget, call })
+	f := newRetentionFixture(t, false, FailedWorkloadConfig{EvidenceLogBytes: 64 * 1024})
+	f.native.tailWorkloadLogs = func(ctx context.Context, _ *runnerv1.TailWorkloadLogsRequest, _ ...grpc.CallOption) (*runnerv1.TailWorkloadLogsResponse, error) {
+		f.tailCalls++
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
+	if err := f.stop(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(f.events, ",") != "reason,evidence@ACTIVE,remove" {
+		t.Fatalf("evidence not stored before removal: %v", f.events)
+	}
+	containers := f.record().GetContainers()
+	if !strings.HasPrefix(containers[0].GetOutputTail(), "[output unavailable: DeadlineExceeded") ||
+		!strings.Contains(containers[1].GetOutputTail(), "read budget") || containers[1].GetExitCode() != 3 || f.tailCalls > 2 {
+		t.Fatalf("unexpected evidence after slow reads (%d calls): %q / %q", f.tailCalls, containers[0].GetOutputTail(), containers[1].GetOutputTail())
+	}
+}
+
 func TestReleaseFailedRetentionForNewerStarts(t *testing.T) {
 	clock := &testClock{now: time.Now().UTC()}
 	r := &Reconciler{failures: newTestFailedWorkloads(FailedWorkloadConfig{Retention: time.Hour, RetentionMax: 4}, clock)}

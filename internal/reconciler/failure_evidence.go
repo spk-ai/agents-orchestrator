@@ -39,14 +39,22 @@ const (
 	// runner-side cut started inside can be dropped whole.
 	evidenceReadSlack = 4 * 1024
 	evidenceTailLines = 2000
-	evidenceTimeout   = 20 * time.Second
-	evidenceCallLimit = 8 * time.Second
 	// failureMessageBytes bounds failure_message, which Runners also copies
 	// into workload notifications. It never carries container output.
 	failureMessageBytes = 2048
 	evidenceNoteBytes   = 256
 
 	evidenceTruncatedMarker = "[agyn: earlier output truncated]\n"
+	evidencePreviousHeader  = "[agyn: previous container instance]\n"
+)
+
+// Evidence deadlines. Reads share one budget and stop when it is spent; the
+// write that stores them has its own, so slow reads never discard what was
+// read. Variables only so tests need not wait them out.
+var (
+	evidenceReadBudget   = 15 * time.Second
+	evidenceCallLimit    = 8 * time.Second
+	evidenceWriteTimeout = 10 * time.Second
 )
 
 // secretPatterns are replaced before anything leaves this process. Evidence
@@ -82,7 +90,7 @@ var secretPatterns = []struct {
 // redactSecrets replaces credential-shaped substrings. It also forces valid
 // UTF-8: protobuf strings must be, and container output need not be.
 func redactSecrets(value string) string {
-	value = strings.ToValidUTF8(value, "�")
+	value = strings.ToValidUTF8(value, "\uFFFD")
 	for _, secret := range secretPatterns {
 		value = secret.pattern.ReplaceAllString(value, secret.replacement)
 	}
@@ -106,12 +114,12 @@ func boundEvidenceText(value string, maxBytes int) (string, bool) {
 	return tail, true
 }
 
-// evidenceOutput turns one raw TailWorkloadLogs read into a stored tail.
-// The first line of a read the runner cut may hold the end of a credential
-// whose recognisable start was cut away, so it is dropped before redaction.
-func evidenceOutput(data []byte, runnerTruncated bool, maxBytes int) string {
-	text := strings.ToValidUTF8(string(data), "�")
-	truncated := runnerTruncated
+// evidenceOutput turns one raw TailWorkloadLogs read into a stored tail of at
+// most maxBytes, header and truncation marker included. The first line of a
+// read the runner cut may hold the end of a credential whose recognisable
+// start was cut away, so it is dropped before redaction.
+func evidenceOutput(data []byte, runnerTruncated bool, maxBytes int, header string) string {
+	text := strings.ToValidUTF8(string(data), "\uFFFD")
 	if runnerTruncated {
 		if newline := strings.IndexByte(text, '\n'); newline >= 0 {
 			text = text[newline+1:]
@@ -121,15 +129,32 @@ func evidenceOutput(data []byte, runnerTruncated bool, maxBytes int) string {
 			text = ""
 		}
 	}
-	text, cut := boundEvidenceText(redactSecrets(text), maxBytes)
-	truncated = truncated || cut
-	if text == "" && !truncated {
-		return "[no output]"
+	text = redactSecrets(text)
+	room := maxBytes - len(header)
+	if !runnerTruncated && len(text) <= room {
+		if text == "" {
+			return clampEvidence(header+"[no output]", maxBytes)
+		}
+		return header + text
 	}
-	if truncated {
-		return evidenceTruncatedMarker + text
+	body := ""
+	if room -= len(evidenceTruncatedMarker); room > 0 {
+		body, _ = boundEvidenceText(text, room)
 	}
-	return text
+	return clampEvidence(header+evidenceTruncatedMarker+body, maxBytes)
+}
+
+// clampEvidence is the last bound on a stored value, for budgets smaller than
+// its markers. It keeps the start, never splitting a rune.
+func clampEvidence(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	end := max(maxBytes, 0)
+	for end > 0 && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return value[:end]
 }
 
 func evidenceNote(format string, args ...any) string {
@@ -280,14 +305,12 @@ func (r *Reconciler) captureFailureEvidence(ctx context.Context, runner runnerv1
 		}
 		snapshot = append(snapshot, clone)
 	}
-	budget := r.failures.evidenceLogBytes
-	if budget > evidenceWorkloadBytes/len(snapshot) {
-		budget = evidenceWorkloadBytes / len(snapshot)
-	}
-	// Its own deadline: a reconcile cycle near its end must not turn evidence
-	// into timeout notes. Removal after it still uses the cycle's context.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), evidenceTimeout)
-	defer cancel()
+	budget := min(r.failures.evidenceLogBytes, MaxFailedWorkloadEvidenceLogBytes, evidenceWorkloadBytes/len(snapshot))
+	// Deadlines of their own: a reconcile cycle near its end must not turn
+	// evidence into timeout notes. Removal after it uses the cycle's context.
+	detached := context.WithoutCancel(ctx)
+	readCtx, cancelReads := context.WithTimeout(detached, evidenceReadBudget)
+	defer cancelReads()
 	unsupported := false
 	for _, container := range snapshot {
 		switch {
@@ -297,8 +320,10 @@ func (r *Reconciler) captureFailureEvidence(ctx context.Context, runner runnerv1
 			container.OutputTail = stringPtr(evidenceNote("%s", inspectionNote(inspectErr)))
 		case unsupported:
 			container.OutputTail = stringPtr(evidenceNote("runner does not implement TailWorkloadLogs"))
+		case readCtx.Err() != nil:
+			container.OutputTail = stringPtr(evidenceNote("the evidence read budget of %s was spent on earlier containers", evidenceReadBudget))
 		default:
-			tail, err := r.tailContainerOutput(ctx, runner, workloadID, container, budget)
+			tail, err := r.tailContainerOutput(readCtx, runner, workloadID, container, budget)
 			if status.Code(err) == codes.Unimplemented {
 				unsupported = true
 				container.OutputTail = stringPtr(evidenceNote("runner does not implement TailWorkloadLogs"))
@@ -312,7 +337,9 @@ func (r *Reconciler) captureFailureEvidence(ctx context.Context, runner runnerv1
 		}
 	}
 	summary := evidenceSummary(snapshot)
-	response, err := r.runners.UpdateWorkload(ctx, &runnersv1.UpdateWorkloadRequest{Id: workloadID, Containers: snapshot})
+	writeCtx, cancelWrite := context.WithTimeout(detached, evidenceWriteTimeout)
+	defer cancelWrite()
+	response, err := r.runners.UpdateWorkload(writeCtx, &runnersv1.UpdateWorkloadRequest{Id: workloadID, Containers: snapshot})
 	if err != nil {
 		// Removal still proceeds; the next attempt, if any, captures again.
 		log.Printf("reconciler: store failure evidence for workload %s: %v; evidence: %s", workloadID, err, summary)
@@ -356,11 +383,11 @@ func (r *Reconciler) tailContainerOutput(ctx context.Context, runner runnerv1.Ru
 	if len(response.GetData()) > request {
 		return "", status.Error(codes.Internal, "runner exceeded the requested log bound")
 	}
-	output := evidenceOutput(response.GetData(), response.GetTruncated(), budget)
+	header := ""
 	if previous {
-		output = "[agyn: previous container instance]\n" + output
+		header = evidencePreviousHeader
 	}
-	return output, nil
+	return evidenceOutput(response.GetData(), response.GetTruncated(), budget, header), nil
 }
 
 func inspectionNote(err error) string {

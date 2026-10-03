@@ -9,7 +9,7 @@ on:
       k8s_runner_ref:
         description: k8s-runner ref to deploy from.
         required: false
-        default: 378675d8aa5aecdc23cbc6fcb285bee85c606ecc
+        default: c0231bbfaf2260d03267e8da3b66181fdb1895d0
       agents_ref:
         description: Agents ref to deploy from.
         required: false
@@ -21,7 +21,7 @@ on:
       runners_ref:
         description: Runners ref to deploy from.
         required: false
-        default: 0223a6ca36c98b83b7bb273e35005032a63b9c04
+        default: 0417696d580004e830d4b4bddf74fd0c44b367ed
       identity_ref:
         description: Identity ref to deploy from.
         required: false
@@ -50,10 +50,10 @@ on:
 # Init images are resolved to the newest published release by the run-tests
 # action. Pinning one here opts this workflow out of every fix shipped after it.
 env:
-  K8S_RUNNER_REF: 378675d8aa5aecdc23cbc6fcb285bee85c606ecc
+  K8S_RUNNER_REF: c0231bbfaf2260d03267e8da3b66181fdb1895d0
   AGENTS_REF: df88f90f6aee77647912e7336e03d43545a2a6a4
   AUTHORIZATION_REF: 30581ca4f834ad8a0a63e14bd0f465333b3929e9
-  RUNNERS_REF: 0223a6ca36c98b83b7bb273e35005032a63b9c04
+  RUNNERS_REF: 0417696d580004e830d4b4bddf74fd0c44b367ed
   IDENTITY_REF: 47aaabc67acfad0b80ca97d5e1b27f96b670f27f
   THREADS_REF: 066fe51e57343b130b38af09d061a6540e0e8e20
   AGYND_CLI_REF: 495920a92cc359e0693e8710f11469240bd5a770
@@ -716,7 +716,7 @@ jobs:
           # runners main carries the agent-instance work (owner_kind/owner_id,
           # ListWorkloadsByAgentInstance, ListVolumesByAgentInstance) since #71,
           # so the patch that used to add it now duplicates declarations.
-          buf generate https://github.com/spk-ai/api.git#ref=b70aa1502b0b95ee3dd9260fef8007b635fdba97,subdir=proto \
+          buf generate https://github.com/spk-ai/api.git#ref=f62e2ad47a5ea5451d88c3cc0138f73be708eb55,subdir=proto \
             --include-imports \
             --path agynio/api/agents/v1 \
             --path agynio/api/runners/v1 \
@@ -1321,7 +1321,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: spk-ai/api
-          ref: b70aa1502b0b95ee3dd9260fef8007b635fdba97
+          ref: f62e2ad47a5ea5451d88c3cc0138f73be708eb55
           path: api
 
       - name: Checkout llm-proxy

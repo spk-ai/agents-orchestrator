@@ -90,14 +90,14 @@ func TestEvidenceOutputKeepsNewestBoundedOutput(t *testing.T) {
 	lines = append(lines, "final error: boom")
 	raw := strings.Join(lines, "\n") + "\n"
 	const budget = 1024
-	got := evidenceOutput([]byte(raw), false, budget)
+	got := evidenceOutput([]byte(raw), false, budget, "")
 	if !strings.HasPrefix(got, evidenceTruncatedMarker) {
 		t.Fatalf("truncation not marked: %q", got[:40])
 	}
-	body := strings.TrimPrefix(got, evidenceTruncatedMarker)
-	if len(body) > budget {
-		t.Fatalf("kept %d bytes, budget %d", len(body), budget)
+	if len(got) > budget {
+		t.Fatalf("stored %d bytes, budget %d", len(got), budget)
 	}
+	body := strings.TrimPrefix(got, evidenceTruncatedMarker)
 	if !strings.HasSuffix(body, "final error: boom\n") {
 		t.Fatalf("newest output lost: %q", body[len(body)-40:])
 	}
@@ -107,11 +107,39 @@ func TestEvidenceOutputKeepsNewestBoundedOutput(t *testing.T) {
 }
 
 func TestEvidenceOutputSmallAndEmpty(t *testing.T) {
-	if got := evidenceOutput([]byte("hello\n"), false, 1024); got != "hello\n" {
+	if got := evidenceOutput([]byte("hello\n"), false, 1024, ""); got != "hello\n" {
 		t.Fatalf("got %q", got)
 	}
-	if got := evidenceOutput(nil, false, 1024); got != "[no output]" {
+	if got := evidenceOutput(nil, false, 1024, ""); got != "[no output]" {
 		t.Fatalf("got %q", got)
+	}
+	if got := evidenceOutput([]byte("hello\n"), false, 1024, evidencePreviousHeader); got != evidencePreviousHeader+"hello\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// The stored value, markers included, never exceeds the bound Runners
+// enforces per container, whatever the budget.
+func TestEvidenceOutputBoundIncludesMarkers(t *testing.T) {
+	line := strings.Repeat("y", 99) + "\n"
+	small := []byte(strings.Repeat(line, 40))
+	for _, budget := range []int{1, 8, 30, 40, 64, 80, 1024} {
+		for _, header := range []string{"", evidencePreviousHeader} {
+			for _, data := range [][]byte{small, []byte("short\n"), nil} {
+				for _, cut := range []bool{false, true} {
+					got := evidenceOutput(data, cut, budget, header)
+					if len(got) > budget || !utf8.ValidString(got) {
+						t.Fatalf("budget %d header %q cut %v: stored %d bytes", budget, header, cut, len(got))
+					}
+				}
+			}
+		}
+	}
+	// At Runners' own bound: a full body plus both markers still fits.
+	big := []byte(strings.Repeat(line, MaxFailedWorkloadEvidenceLogBytes/len(line)+10))
+	got := evidenceOutput(big, true, MaxFailedWorkloadEvidenceLogBytes, evidencePreviousHeader)
+	if len(got) > MaxFailedWorkloadEvidenceLogBytes || !strings.HasPrefix(got, evidencePreviousHeader+evidenceTruncatedMarker) || !strings.HasSuffix(got, "y\n") {
+		t.Fatalf("markers or newest output lost: %q ... %q", got[:80], got[len(got)-10:])
 	}
 }
 
@@ -120,7 +148,7 @@ func TestEvidenceOutputSmallAndEmpty(t *testing.T) {
 func TestEvidenceOutputDropsLineCutByRunner(t *testing.T) {
 	partial := testJWT[10:]
 	raw := partial + " trailing words\nnext line\n"
-	got := evidenceOutput([]byte(raw), true, 1024)
+	got := evidenceOutput([]byte(raw), true, 1024, "")
 	if strings.Contains(got, partial[len(partial)-20:]) {
 		t.Fatalf("partial credential kept: %q", got)
 	}
@@ -128,7 +156,7 @@ func TestEvidenceOutputDropsLineCutByRunner(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 	// Without any newline the leading partial word is dropped instead.
-	got = evidenceOutput([]byte(partial+" tail"), true, 1024)
+	got = evidenceOutput([]byte(partial+" tail"), true, 1024, "")
 	if strings.Contains(got, partial[len(partial)-20:]) || !strings.HasSuffix(got, "tail") {
 		t.Fatalf("got %q", got)
 	}
@@ -139,13 +167,13 @@ func TestEvidenceOutputDropsLineCutByRunner(t *testing.T) {
 func TestEvidenceOutputRedactsBeforeBounding(t *testing.T) {
 	raw := "start\n" + strings.Repeat("a", 30) + " key " + testJWT + " end\nlast\n"
 	for budget := 8; budget < len(raw); budget++ {
-		got := evidenceOutput([]byte(raw), false, budget)
+		got := evidenceOutput([]byte(raw), false, budget, "")
 		for i := 0; i+12 <= len(testJWT); i += 4 {
 			if strings.Contains(got, testJWT[i:i+12]) {
 				t.Fatalf("budget %d leaked a credential fragment: %q", budget, got)
 			}
 		}
-		if len(strings.TrimPrefix(got, evidenceTruncatedMarker)) > budget {
+		if len(got) > budget {
 			t.Fatalf("budget %d exceeded: %q", budget, got)
 		}
 	}
