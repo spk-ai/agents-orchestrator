@@ -168,10 +168,7 @@ func (a *Assembler) AssembleSandbox(ctx context.Context, sandbox *agentsv1.Sandb
 	}
 	// The binaries land while the overlay comes up; see overlayPlan.withInit.
 	initContainers = overlay.withInit(initContainers)
-	if overlay != nil {
-		main.Mounts = append(main.Mounts, overlay.mainMounts...)
-		volumes = append(volumes, overlay.volumes...)
-	}
+	volumes = append(volumes, overlay.mountMain(main)...)
 	sort.Slice(volumes, func(i, j int) bool { return volumes[i].Name < volumes[j].Name })
 	request := &runnerv1.StartWorkloadRequest{
 		Main:           main,

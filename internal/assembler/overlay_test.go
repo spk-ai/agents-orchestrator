@@ -52,6 +52,13 @@ func userEnv(name, value string) *agentsv1.Env {
 // options and a gateway override.
 func assembleOverlayAgent(t *testing.T, cfg *config.Config, agentEnvs ...*agentsv1.Env) *AssembleResult {
 	t.Helper()
+	return assembleOverlayAgentWithVolumes(t, cfg, nil, agentEnvs...)
+}
+
+// assembleOverlayAgentWithVolumes is assembleOverlayAgent for an environment
+// that declares volumes of its own.
+func assembleOverlayAgentWithVolumes(t *testing.T, cfg *config.Config, environmentVolumes []*agentsv1.Volume, agentEnvs ...*agentsv1.Env) *AssembleResult {
+	t.Helper()
 	agent := &agentsv1.Agent{Meta: &agentsv1.EntityMeta{Id: fixedAgentID.String()}, OrganizationId: "org-1", Image: "agent-image"}
 	agents := &testutil.FakeAgentsClient{
 		GetAgentFunc: func(context.Context, *agentsv1.GetAgentRequest, ...grpc.CallOption) (*agentsv1.GetAgentResponse, error) {
@@ -69,7 +76,10 @@ func assembleOverlayAgent(t *testing.T, cfg *config.Config, agentEnvs ...*agents
 			}
 			return &agentsv1.ListEnvsResponse{}, nil
 		},
-		ListVolumesFunc: func(context.Context, *agentsv1.ListVolumesRequest, ...grpc.CallOption) (*agentsv1.ListVolumesResponse, error) {
+		ListVolumesFunc: func(_ context.Context, req *agentsv1.ListVolumesRequest, _ ...grpc.CallOption) (*agentsv1.ListVolumesResponse, error) {
+			if req.GetEnvironmentId() != "" {
+				return &agentsv1.ListVolumesResponse{Volumes: environmentVolumes}, nil
+			}
 			return &agentsv1.ListVolumesResponse{}, nil
 		},
 	}
@@ -216,6 +226,50 @@ func TestExplicitProxyWorkloadEnv(t *testing.T) {
 func TestExplicitProxyKeepsAUserHome(t *testing.T) {
 	request := assembleOverlayAgent(t, overlayTestConfig(config.WorkloadNetworkModeExplicitProxy), userEnv("HOME", "/workspace/home")).Request
 	assertEnv(t, envMap(request.Main.Env), "HOME", "/workspace/home")
+}
+
+// An environment that mounts its own volume at the default home keeps it as
+// the home. A second mount at the same path is refused by Kubernetes ("must
+// be unique"), and spelled with a trailing slash it passes validation and the
+// platform's emptyDir silently shadows the environment's volume.
+func TestExplicitProxyLeavesAnEnvironmentHomeVolumeInPlace(t *testing.T) {
+	for _, mountPath := range []string{"/home/agyn", "/home/agyn/"} {
+		t.Run(mountPath, func(t *testing.T) {
+			home := &agentsv1.Volume{Meta: &agentsv1.EntityMeta{Id: "ffffffff-0000-4000-8000-000000000006"}, Name: "home", MountPath: mountPath, Persistent: true, Size: "1Gi"}
+			request := assembleOverlayAgentWithVolumes(t, overlayTestConfig(config.WorkloadNetworkModeExplicitProxy), []*agentsv1.Volume{home}).Request
+			assertSingleHomeMount(t, request, "vol-ffffffff")
+			assertEnv(t, envMap(request.Main.Env), "HOME", "/home/agyn")
+
+			fixture := newSandboxFixture()
+			*fixture.cfg = *overlayTestConfig(config.WorkloadNetworkModeExplicitProxy)
+			fixture.cfg.SandboxWorkspaceSizeGB = testSandboxSizeGB
+			listVolumes := fixture.agents.ListVolumesFunc
+			fixture.agents.ListVolumesFunc = func(ctx context.Context, req *agentsv1.ListVolumesRequest, opts ...grpc.CallOption) (*agentsv1.ListVolumesResponse, error) {
+				resp, err := listVolumes(ctx, req, opts...)
+				if err == nil && req.GetEnvironmentId() != "" {
+					resp.Volumes = append(resp.Volumes, home)
+				}
+				return resp, err
+			}
+			assertSingleHomeMount(t, fixture.assemble(t).Request, "vol-ffffffff")
+		})
+	}
+}
+
+func assertSingleHomeMount(t *testing.T, request *runnerv1.StartWorkloadRequest, volume string) {
+	t.Helper()
+	var at []string
+	for _, mount := range request.GetMain().GetMounts() {
+		if strings.TrimRight(mount.GetMountPath(), "/") == agynHomeMountPath {
+			at = append(at, mount.GetVolume())
+		}
+	}
+	if !slices.Equal(at, []string{volume}) {
+		t.Fatalf("main mounts %v at %s, want only the environment's %s", at, agynHomeMountPath, volume)
+	}
+	if findVolumeSpec(request.GetVolumes(), agynHomeVolumeName) != nil {
+		t.Fatal("an unused platform home volume was still declared")
+	}
 }
 
 func TestExplicitProxySandbox(t *testing.T) {

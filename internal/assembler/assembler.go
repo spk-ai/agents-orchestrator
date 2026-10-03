@@ -578,9 +578,7 @@ func (a *Assembler) Assemble(ctx context.Context, agentID, agentInstanceID, thre
 		return nil, err
 	}
 	initContainers = overlay.withInit(initContainers)
-	if overlay != nil {
-		main.Mounts = append(main.Mounts, overlay.mainMounts...)
-	}
+	overlayVolumes := overlay.mountMain(main)
 
 	mcps, err := a.listMcps(ctx, agentID)
 	if err != nil {
@@ -636,9 +634,7 @@ func (a *Assembler) Assemble(ctx context.Context, agentID, agentInstanceID, thre
 		Kind: runnerv1.VolumeKind_VOLUME_KIND_EPHEMERAL,
 	}
 	volumes := append(volumeResolver.Specs(), agynBinVolume)
-	if overlay != nil {
-		volumes = append(volumes, overlay.volumes...)
-	}
+	volumes = append(volumes, overlayVolumes...)
 	sort.Slice(volumes, func(i, j int) bool { return volumes[i].Name < volumes[j].Name })
 
 	request := &runnerv1.StartWorkloadRequest{

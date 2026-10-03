@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 
@@ -56,7 +57,7 @@ type overlayPlan struct {
 	sidecar *runnerv1.ContainerSpec
 	wait    *runnerv1.ContainerSpec
 	volumes []*runnerv1.VolumeSpec
-	// mainMounts are added to the main container only.
+	// mainMounts are added to the main container only; see mountMain.
 	mainMounts []*runnerv1.VolumeMount
 	dnsConfig  *runnerv1.DnsConfig
 	explicit   bool
@@ -70,6 +71,36 @@ func (p *overlayPlan) withInit(platform []*runnerv1.ContainerSpec) []*runnerv1.C
 		return platform
 	}
 	return append(append([]*runnerv1.ContainerSpec{p.enroll, p.sidecar}, platform...), p.wait)
+}
+
+// mountMain adds the overlay's main-container mounts and returns the Pod
+// volumes the overlay needs. A path the environment already mounts is left to
+// the environment's volume, which is then the writable home: Kubernetes
+// refuses two mounts at one path, and spelled differently ("/home/agyn/") the
+// platform's emptyDir would silently shadow the environment's volume.
+func (p *overlayPlan) mountMain(main *runnerv1.ContainerSpec) []*runnerv1.VolumeSpec {
+	if p == nil {
+		return nil
+	}
+	taken := map[string]struct{}{}
+	for _, mount := range main.GetMounts() {
+		taken[path.Clean(strings.TrimSpace(mount.GetMountPath()))] = struct{}{}
+	}
+	unused := map[string]struct{}{}
+	for _, mount := range p.mainMounts {
+		if _, ok := taken[path.Clean(mount.GetMountPath())]; ok {
+			unused[mount.GetVolume()] = struct{}{}
+			continue
+		}
+		main.Mounts = append(main.Mounts, mount)
+	}
+	volumes := make([]*runnerv1.VolumeSpec, 0, len(p.volumes))
+	for _, volume := range p.volumes {
+		if _, ok := unused[volume.GetName()]; !ok {
+			volumes = append(volumes, volume)
+		}
+	}
+	return volumes
 }
 
 func (a *Assembler) explicitProxy() bool {
