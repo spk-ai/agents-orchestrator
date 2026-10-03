@@ -16,6 +16,13 @@
       "kind": "contribution"
     },
     {
+      "id": "failed-workload-retention",
+      "path": "FAILED-WORKLOAD-RETENTION.md",
+      "title": "Failed Workload Retention And Evidence",
+      "purpose": "Operator settings, reading failure evidence, early release and cross-repo rollout order.",
+      "kind": "operations"
+    },
+    {
       "id": "volume-migration",
       "path": "VOLUME-ANCHOR-MIGRATION.md",
       "title": "Existing Workspace Migration",

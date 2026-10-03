@@ -561,7 +561,7 @@ func TestReconcileWorkloadsFailsCrashloop(t *testing.T) {
 	if updateReq.GetFailureReason() != runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_CRASHLOOP {
 		t.Fatalf("unexpected failure reason: %v", updateReq.GetFailureReason())
 	}
-	if updateReq.GetFailureMessage() != message {
+	if updateReq.GetFailureMessage() != `health check: main container "main" is crash looping (state=WAITING reason=CrashLoopBackOff restarts=3): `+message {
 		t.Fatalf("unexpected failure message: %s", updateReq.GetFailureMessage())
 	}
 	if updateReq.GetInstanceId() != rawInstanceID {

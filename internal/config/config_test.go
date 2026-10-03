@@ -136,7 +136,8 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		// carries its own platform version rather than a ref to build from.
 		"./.e2e-tooling/.github/actions/provision-vm",
 		"ref: 435b549a937129b6858e7314648eb690894209fe",
-		"K8S_RUNNER_REF: 1796887dcaeff085dab1cb8e59c4a85927fd7dd3",
+		// The runner serving bounded TailWorkloadLogs for failure evidence.
+		"K8S_RUNNER_REF: 378675d8aa5aecdc23cbc6fcb285bee85c606ecc",
 		// The explicit-proxy leg: the runner's own workload-proxy image,
 		// restricted admission and the overlay-only task policy, real agent
 		// turns, a direct NET_ADMIN refusal and the live Pod negatives.
@@ -196,6 +197,13 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		// data-model lag bury the line under any tail, and an early grep exit
 		// SIGPIPEs kubectl under pipefail.
 		`grep -q 'llm-proxy listening on ziti service llm-proxy' "${RUNNER_TEMP}/llm-proxy.log"`,
+		// Failed-workload retention runs last, against a redeployed
+		// orchestrator, so the default-profile suites keep their retry timing.
+		"cp ../.github/e2e/failed_workload_retention_test.go.txt suites/go-core/tests/failed_workload_retention_test.go",
+		"name: Redeploy orchestrator with failed-workload retention",
+		"FAILED_WORKLOAD_RETENTION: 90s",
+		`E2E_GO_TEST_RUN: "^TestFailedWorkloadRetentionKeepsPodAndEvidence$"`,
+		"tag: failed_workload_retention",
 	} {
 		if !strings.Contains(e2eWorkflow, expected) {
 			t.Fatalf("expected E2E workflow to contain %q", expected)
@@ -631,5 +639,60 @@ func TestFromEnvRunnersTokenFile(t *testing.T) {
 	}
 	if cfg.RunnersTokenFile != "/var/run/secrets/agyn.io/runners-token/token" {
 		t.Fatalf("runners token file %q", cfg.RunnersTokenFile)
+	}
+}
+
+func TestFailedWorkloadRetentionDefaultsKeepCurrentBehaviour(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("ZITI_ENABLED", "false")
+	for _, name := range []string{"FAILED_WORKLOAD_RETENTION", "FAILED_WORKLOAD_RETENTION_MAX", "FAILED_WORKLOAD_EVIDENCE_LOG_BYTES"} {
+		t.Setenv(name, "")
+	}
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FailedWorkloadRetention != 0 || cfg.FailedWorkloadRetentionMax != 1 || cfg.FailedWorkloadEvidenceLogBytes != 64*1024 {
+		t.Fatalf("unexpected defaults: %s %d %d", cfg.FailedWorkloadRetention, cfg.FailedWorkloadRetentionMax, cfg.FailedWorkloadEvidenceLogBytes)
+	}
+}
+
+func TestFailedWorkloadRetentionSettings(t *testing.T) {
+	for _, test := range []struct {
+		retention, max, logBytes string
+		wantErr                  string
+		wantRetention            time.Duration
+		wantMax, wantLogBytes    int
+	}{
+		{retention: "30m", max: "2", logBytes: "131072", wantRetention: 30 * time.Minute, wantMax: 2, wantLogBytes: 131072},
+		{retention: "90s", max: "0", logBytes: "0", wantRetention: 90 * time.Second, wantMax: 0, wantLogBytes: 0},
+		{retention: "soon", wantErr: "parse FAILED_WORKLOAD_RETENTION"},
+		{retention: "-1m", wantErr: "FAILED_WORKLOAD_RETENTION must be"},
+		{retention: "25h", wantErr: "FAILED_WORKLOAD_RETENTION must be"},
+		{max: "many", wantErr: "parse FAILED_WORKLOAD_RETENTION_MAX"},
+		{max: "17", wantErr: "FAILED_WORKLOAD_RETENTION_MAX must be"},
+		{logBytes: "-1", wantErr: "FAILED_WORKLOAD_EVIDENCE_LOG_BYTES must be"},
+		{logBytes: "262145", wantErr: "FAILED_WORKLOAD_EVIDENCE_LOG_BYTES must be"},
+	} {
+		t.Run(test.retention+"/"+test.max+"/"+test.logBytes, func(t *testing.T) {
+			setBaseEnv(t)
+			t.Setenv("ZITI_ENABLED", "false")
+			t.Setenv("FAILED_WORKLOAD_RETENTION", test.retention)
+			t.Setenv("FAILED_WORKLOAD_RETENTION_MAX", test.max)
+			t.Setenv("FAILED_WORKLOAD_EVIDENCE_LOG_BYTES", test.logBytes)
+			cfg, err := FromEnv()
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("expected %q, got %v", test.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.FailedWorkloadRetention != test.wantRetention || cfg.FailedWorkloadRetentionMax != test.wantMax || cfg.FailedWorkloadEvidenceLogBytes != test.wantLogBytes {
+				t.Fatalf("got %s %d %d", cfg.FailedWorkloadRetention, cfg.FailedWorkloadRetentionMax, cfg.FailedWorkloadEvidenceLogBytes)
+			}
+		})
 	}
 }

@@ -216,7 +216,7 @@ func (r *Reconciler) startPreparedWorkload(ctx context.Context, runner runnerv1.
 			r.compensateIdentity(ctx, stringPtr(metadata.GetZitiIdentityId()), "prepared start preflight failure")
 			r.revokePullCredential(ctx, metadata.GetId())
 		} else if owned != nil {
-			r.markWorkloadFailed(ctx, owned.Meta.Id, nil, runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_START_FAILED, "prepared start did not complete; reconciliation required", nil)
+			r.markWorkloadFailed(ctx, owned.Meta.Id, nil, runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_START_FAILED, fmt.Sprintf("prepared start did not complete; reconciliation required: %v", resultErr), nil)
 			if err := r.stopPreparedWorkload(ctx, runner, owned); err != nil {
 				resultErr = errors.Join(resultErr, err)
 			}

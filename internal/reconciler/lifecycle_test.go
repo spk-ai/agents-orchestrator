@@ -1581,6 +1581,14 @@ type fakeRunnerClient struct {
 	removeVolume                 func(context.Context, *runnerv1.RemoveVolumeRequest, ...grpc.CallOption) (*runnerv1.RemoveVolumeResponse, error)
 	inspectWorkload              func(context.Context, *runnerv1.InspectWorkloadRequest, ...grpc.CallOption) (*runnerv1.InspectWorkloadResponse, error)
 	findWorkloadsByLabels        func(context.Context, *runnerv1.FindWorkloadsByLabelsRequest, ...grpc.CallOption) (*runnerv1.FindWorkloadsByLabelsResponse, error)
+	tailWorkloadLogs             func(context.Context, *runnerv1.TailWorkloadLogsRequest, ...grpc.CallOption) (*runnerv1.TailWorkloadLogsResponse, error)
+}
+
+func (f *fakeRunnerClient) TailWorkloadLogs(ctx context.Context, req *runnerv1.TailWorkloadLogsRequest, opts ...grpc.CallOption) (*runnerv1.TailWorkloadLogsResponse, error) {
+	if f.tailWorkloadLogs != nil {
+		return f.tailWorkloadLogs(ctx, req, opts...)
+	}
+	return nil, status.Error(codes.Unimplemented, "log tails unavailable")
 }
 
 func (f *fakeRunnerClient) ObserveWorkloadPreparation(ctx context.Context, req *runnerv1.ObserveWorkloadPreparationRequest, opts ...grpc.CallOption) (*runnerv1.ObserveWorkloadPreparationResponse, error) {

@@ -92,6 +92,19 @@ type Config struct {
 	// workload-proxy (enroll, serve, wait) in explicit-proxy mode.
 	WorkloadProxyImage      string
 	WorkloadProxyEntrypoint string
+
+	// FailedWorkloadRetention keeps a failed agent workload's Pod this long
+	// for investigation (FAILED_WORKLOAD_RETENTION, default 0: removed at
+	// once). A retained Pod keeps its capacity slot and its agent instance is
+	// not restarted until it is removed.
+	FailedWorkloadRetention time.Duration
+	// FailedWorkloadRetentionMax bounds how many failed Pods are retained at
+	// once (FAILED_WORKLOAD_RETENTION_MAX, default 1).
+	FailedWorkloadRetentionMax int
+	// FailedWorkloadEvidenceLogBytes is the newest output kept per container
+	// in a failed workload's record (FAILED_WORKLOAD_EVIDENCE_LOG_BYTES,
+	// default 65536, at most 262144; 0 records container statuses only).
+	FailedWorkloadEvidenceLogBytes int
 }
 
 func FromEnv() (Config, error) {
@@ -386,6 +399,10 @@ func FromEnv() (Config, error) {
 		cfg.StopInactiveInstances = parsed
 	}
 
+	if err := parseFailedWorkloadConfig(&cfg); err != nil {
+		return Config{}, err
+	}
+
 	cfg.LeaseName = os.Getenv("LEASE_NAME")
 	if cfg.LeaseName == "" {
 		cfg.LeaseName = "agents-orchestrator"
@@ -393,6 +410,52 @@ func FromEnv() (Config, error) {
 	cfg.LeaseNamespace = os.Getenv("LEASE_NAMESPACE")
 	cfg.EgressCANamespace = os.Getenv("EGRESS_CA_NAMESPACE")
 	return cfg, nil
+}
+
+// Failed-workload retention bounds. The evidence bound is Runners' own
+// per-container limit on Container.output_tail.
+const (
+	defaultFailedWorkloadRetentionMax     = 1
+	defaultFailedWorkloadEvidenceLogBytes = 64 * 1024
+	maxFailedWorkloadEvidenceLogBytes     = 256 * 1024
+	maxFailedWorkloadRetention            = 24 * time.Hour
+	maxFailedWorkloadRetentionMax         = 16
+)
+
+func parseFailedWorkloadConfig(cfg *Config) error {
+	if raw := strings.TrimSpace(os.Getenv("FAILED_WORKLOAD_RETENTION")); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			return fmt.Errorf("parse FAILED_WORKLOAD_RETENTION: %w", err)
+		}
+		if parsed < 0 || parsed > maxFailedWorkloadRetention {
+			return fmt.Errorf("FAILED_WORKLOAD_RETENTION must be between 0 and %s", maxFailedWorkloadRetention)
+		}
+		cfg.FailedWorkloadRetention = parsed
+	}
+	cfg.FailedWorkloadRetentionMax = defaultFailedWorkloadRetentionMax
+	if raw := strings.TrimSpace(os.Getenv("FAILED_WORKLOAD_RETENTION_MAX")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return fmt.Errorf("parse FAILED_WORKLOAD_RETENTION_MAX: %w", err)
+		}
+		if parsed < 0 || parsed > maxFailedWorkloadRetentionMax {
+			return fmt.Errorf("FAILED_WORKLOAD_RETENTION_MAX must be between 0 and %d", maxFailedWorkloadRetentionMax)
+		}
+		cfg.FailedWorkloadRetentionMax = parsed
+	}
+	cfg.FailedWorkloadEvidenceLogBytes = defaultFailedWorkloadEvidenceLogBytes
+	if raw := strings.TrimSpace(os.Getenv("FAILED_WORKLOAD_EVIDENCE_LOG_BYTES")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return fmt.Errorf("parse FAILED_WORKLOAD_EVIDENCE_LOG_BYTES: %w", err)
+		}
+		if parsed < 0 || parsed > maxFailedWorkloadEvidenceLogBytes {
+			return fmt.Errorf("FAILED_WORKLOAD_EVIDENCE_LOG_BYTES must be between 0 and %d", maxFailedWorkloadEvidenceLogBytes)
+		}
+		cfg.FailedWorkloadEvidenceLogBytes = parsed
+	}
+	return nil
 }
 
 func parseUUIDList(raw string, name string) ([]string, error) {

@@ -52,6 +52,8 @@ type Reconciler struct {
 	// The identity this process acts as, for the callees that require a caller
 	// rather than serving an absent one as the platform.
 	platformIdentityID uuid.UUID
+	// Retention and evidence for failed workloads; nil keeps neither.
+	failures *failedWorkloads
 }
 
 // WithImageProxy enables the per-workload pull credential lifecycle.
@@ -79,6 +81,7 @@ type Config struct {
 	StopInactiveInstances     bool
 	MeteringSampleInterval    time.Duration
 	PlatformIdentityID        uuid.UUID
+	FailedWorkloads           FailedWorkloadConfig
 }
 
 func New(cfg Config) *Reconciler {
@@ -101,6 +104,7 @@ func New(cfg Config) *Reconciler {
 		stopSec:                   cfg.StopSec,
 		stopInactiveInstances:     cfg.StopInactiveInstances,
 		platformIdentityID:        cfg.PlatformIdentityID,
+		failures:                  newFailedWorkloads(cfg.FailedWorkloads),
 	}
 }
 
@@ -180,6 +184,7 @@ func (r *Reconciler) reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	r.releaseFailedRetention(desired, actual, stopRequests, agentUpdatedAt)
 	now := time.Now().UTC()
 	started := 0
 	for _, candidate := range actions.ToStart {
@@ -556,6 +561,12 @@ func mapRunnerContainers(containers []*runnerv1.WorkloadContainer) ([]*runnersv1
 		if err != nil {
 			return nil, err
 		}
+		// A termination message can be the container's last output
+		// (FallbackToLogsOnError), so it is redacted like any other evidence.
+		var message *string
+		if container.Message != nil {
+			message = stringPtr(redactSecrets(container.GetMessage()))
+		}
 		result = append(result, &runnersv1.Container{
 			ContainerId:  container.GetContainerId(),
 			Name:         container.GetName(),
@@ -563,7 +574,7 @@ func mapRunnerContainers(containers []*runnerv1.WorkloadContainer) ([]*runnersv1
 			Image:        container.GetImage(),
 			Status:       status,
 			Reason:       container.Reason,
-			Message:      container.Message,
+			Message:      message,
 			ExitCode:     container.ExitCode,
 			RestartCount: container.GetRestartCount(),
 			StartedAt:    container.StartedAt,
