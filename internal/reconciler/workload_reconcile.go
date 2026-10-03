@@ -211,6 +211,9 @@ func (r *Reconciler) reconcileWorkloads(ctx context.Context) error {
 }
 
 const (
+	// startGracePeriod is the start deadline: a preparation that has not been
+	// activated, or a container still pulling or failing to be created, after
+	// this long fails its start.
 	startGracePeriod     = 60 * time.Second
 	initRetryThreshold   = 3
 	crashloopThreshold   = 3
@@ -405,17 +408,17 @@ func classifyStartingContainers(containers []*runnersv1.Container, workload *run
 		case runnersv1.ContainerRole_CONTAINER_ROLE_INIT:
 			status := container.GetStatus()
 			if isConfigInvalidFailure(container) {
-				return false, &workloadFailure{reason: runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_CONFIG_INVALID, message: containerFailureMessage(container)}, nil
+				return false, containerFailure(runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_CONFIG_INVALID, startCheck, "cannot be created", container), nil
 			}
 			if isImagePullFailure(container) && startAge > startGracePeriod {
-				return false, &workloadFailure{reason: runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_IMAGE_PULL_FAILED, message: containerFailureMessage(container)}, nil
+				return false, containerFailure(runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_IMAGE_PULL_FAILED, startCheck, fmt.Sprintf("could not pull its image within %s", startGracePeriod), container), nil
 			}
 			switch status {
 			case runnersv1.ContainerStatus_CONTAINER_STATUS_WAITING:
 				initBlocked = true
 			case runnersv1.ContainerStatus_CONTAINER_STATUS_TERMINATED:
 				if container.GetExitCode() != 0 {
-					return false, &workloadFailure{reason: runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_START_FAILED, message: containerFailureMessage(container)}, nil
+					return false, containerFailure(runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_START_FAILED, startCheck, "exited before the workload started", container), nil
 				}
 			case runnersv1.ContainerStatus_CONTAINER_STATUS_RUNNING:
 			default:
@@ -428,24 +431,17 @@ func classifyStartingContainers(containers []*runnersv1.Container, workload *run
 				mainRunning = false
 			}
 			if status == runnersv1.ContainerStatus_CONTAINER_STATUS_TERMINATED {
-				message := containerFailureMessage(container)
-				exitCode := container.GetExitCode()
-				if message == "" {
-					message = fmt.Sprintf("main container terminated with exit code %d", exitCode)
-				} else if exitCode != 0 {
-					message = fmt.Sprintf("%s (exit code %d)", message, exitCode)
-				}
-				return false, &workloadFailure{reason: runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_START_FAILED, message: message}, nil
+				return false, containerFailure(runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_START_FAILED, startCheck, "exited before the workload became ready", container), nil
 			}
 			if status == runnersv1.ContainerStatus_CONTAINER_STATUS_WAITING {
 				if container.GetReason() == crashLoopBackoffFlag && container.GetRestartCount() >= crashloopThreshold {
-					return false, &workloadFailure{reason: runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_CRASHLOOP, message: containerFailureMessage(container)}, nil
+					return false, containerFailure(runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_CRASHLOOP, startCheck, "is crash looping", container), nil
 				}
 				if isImagePullFailure(container) && startAge > startGracePeriod {
-					return false, &workloadFailure{reason: runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_IMAGE_PULL_FAILED, message: containerFailureMessage(container)}, nil
+					return false, containerFailure(runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_IMAGE_PULL_FAILED, startCheck, fmt.Sprintf("could not pull its image within %s", startGracePeriod), container), nil
 				}
 				if isConfigInvalidFailure(container) && startAge > startGracePeriod {
-					return false, &workloadFailure{reason: runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_CONFIG_INVALID, message: containerFailureMessage(container)}, nil
+					return false, containerFailure(runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_CONFIG_INVALID, startCheck, fmt.Sprintf("could not be created within %s", startGracePeriod), container), nil
 				}
 			}
 		default:
@@ -469,7 +465,7 @@ func classifyRunningContainers(containers []*runnersv1.Container) (*workloadFail
 			continue
 		}
 		if container.GetStatus() == runnersv1.ContainerStatus_CONTAINER_STATUS_WAITING && container.GetReason() == crashLoopBackoffFlag && container.GetRestartCount() >= crashloopThreshold {
-			return &workloadFailure{reason: runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_CRASHLOOP, message: containerFailureMessage(container)}, nil
+			return containerFailure(runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_CRASHLOOP, healthCheck, "is crash looping", container), nil
 		}
 	}
 	return nil, nil
@@ -501,12 +497,17 @@ func isConfigInvalidFailure(container *runnersv1.Container) bool {
 	return ok
 }
 
-func containerFailureMessage(container *runnersv1.Container) string {
-	if container.GetMessage() != "" {
-		return container.GetMessage()
-	}
-	return container.GetReason()
-}
+// The checks a failure_message names, so the record says which one failed.
+const (
+	// startCheck classifies a STARTING workload's containers.
+	startCheck = "start check"
+	// healthCheck classifies a RUNNING workload's main container.
+	healthCheck = "health check"
+	// startDeadline fails a start that did not reach activation in time.
+	startDeadline = "start deadline"
+	// runtimeCheck fails a workload whose Pod the runner no longer has.
+	runtimeCheck = "runtime check"
+)
 
 // runnersForWorkloads lists the runners of every organization that owns an
 // agent, then adds any runner a tracked workload names that the listing missed.

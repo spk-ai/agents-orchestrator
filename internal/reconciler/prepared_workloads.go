@@ -252,6 +252,14 @@ func (r *Reconciler) stopPreparedWorkload(ctx context.Context, runner runnerv1.R
 	if err != nil {
 		return err
 	}
+	// A failed Pod is retained, or its evidence captured, before REMOVING is
+	// persisted: once removal begins the Pod and its logs may be gone.
+	if w.Status == runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED && failedPodMayExist(w) {
+		if r.holdFailedWorkload(ctx, runner, w) {
+			reflectPreparedWorkload(previous, w)
+			return nil
+		}
+	}
 	phase := w.Preparation.Phase
 	if phase == runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_RESERVED {
 		if err := revokePreparedAnchor(ctx, runner, w); err != nil {
@@ -259,6 +267,7 @@ func (r *Reconciler) stopPreparedWorkload(ctx context.Context, runner runnerv1.R
 		}
 		w, err = r.updatePreparedWorkload(ctx, w, &runnersv1.UpdatePreparedWorkloadRequest{Operation: &runnersv1.UpdatePreparedWorkloadRequest_AbortReservation{AbortReservation: &runnersv1.AbortWorkloadReservation{}}}, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED)
 		if err == nil {
+			r.failures.forget(w.Meta.Id)
 			r.signalRemovalConfirmed()
 		}
 	} else if phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVING && phase != runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_REMOVED {
@@ -300,6 +309,7 @@ func (r *Reconciler) stopPreparedWorkload(ctx context.Context, runner runnerv1.R
 		if err != nil {
 			return err
 		}
+		r.failures.forget(w.Meta.Id)
 		r.signalRemovalConfirmed()
 		reflectPreparedWorkload(previous, w)
 	}
@@ -326,13 +336,14 @@ func (r *Reconciler) handlePreparedRunnerWorkload(ctx context.Context, runner ru
 			return err
 		}
 		if time.Since(created) > startGracePeriod {
+			r.failStartDeadline(ctx, w, fmt.Sprintf("preparation stopped in phase %s for longer than %s; the Pod was never activated", preparedPhaseName(w), startGracePeriod))
 			return r.stopPreparedWorkload(ctx, runner, previous)
 		}
 		return nil
 	}
 	response, err := runner.InspectPreparedWorkload(ctx, &runnerv1.InspectPreparedWorkloadRequest{Expected: proto.Clone(w.Preparation.Binding).(*runnerv1.WorkloadBinding)})
 	if status.Code(err) == codes.NotFound {
-		r.markWorkloadFailed(ctx, w.Meta.Id, nil, runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_RUNTIME_LOST, "prepared workload absent on runner", nil)
+		r.markWorkloadFailed(ctx, w.Meta.Id, nil, runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_RUNTIME_LOST, runtimeCheck+": the prepared Pod is absent on the runner", nil)
 		return r.stopPreparedWorkload(ctx, runner, previous)
 	}
 	if err != nil {
@@ -353,6 +364,7 @@ func (r *Reconciler) handlePreparedRunnerWorkload(ctx context.Context, runner ru
 			return err
 		}
 		if time.Since(created) > startGracePeriod {
+			r.failStartDeadline(ctx, w, fmt.Sprintf("the Pod was prepared but not activated within %s (phase %s)", startGracePeriod, preparedPhaseName(w)))
 			return r.stopPreparedWorkload(ctx, runner, previous)
 		}
 		return nil
@@ -378,7 +390,7 @@ func (r *Reconciler) handlePreparedRunnerWorkload(ctx context.Context, runner ru
 		failure, err = classifyRunningContainers(containers)
 		for _, container := range containers {
 			if container.GetRole() == runnersv1.ContainerRole_CONTAINER_ROLE_MAIN && container.GetStatus() == runnersv1.ContainerStatus_CONTAINER_STATUS_TERMINATED {
-				failure = &workloadFailure{reason: runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_RUNTIME_LOST, message: "prepared main container exited"}
+				failure = containerFailure(runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_RUNTIME_LOST, healthCheck, "exited", container)
 				break
 			}
 		}
@@ -416,4 +428,33 @@ func (r *Reconciler) handlePreparedRunnerWorkload(ctx context.Context, runner ru
 		}
 	}
 	return nil
+}
+
+// failedPodMayExist reports whether a prepared workload still has a bound
+// Pod whose removal has not begun -- the only state in which a failed Pod can
+// be retained or its evidence read.
+func failedPodMayExist(w *runnersv1.Workload) bool {
+	p := w.GetPreparation()
+	if p == nil || p.Binding == nil {
+		return false
+	}
+	switch p.Phase {
+	case runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_BOUND, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_ACTIVATING, runnersv1.PreparedWorkloadPhase_PREPARED_WORKLOAD_PHASE_ACTIVE:
+		return true
+	default:
+		return false
+	}
+}
+
+func preparedPhaseName(w *runnersv1.Workload) string {
+	return strings.TrimPrefix(w.GetPreparation().GetPhase().String(), "PREPARED_WORKLOAD_PHASE_")
+}
+
+// failStartDeadline fails a start that missed the start deadline. Only a
+// STARTING record is marked: a stop already in progress keeps its status.
+func (r *Reconciler) failStartDeadline(ctx context.Context, w *runnersv1.Workload, detail string) {
+	if w.Status != runnersv1.WorkloadStatus_WORKLOAD_STATUS_STARTING {
+		return
+	}
+	r.markWorkloadFailed(ctx, w.Meta.Id, nil, runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_START_FAILED, startDeadline+": "+detail, nil)
 }
