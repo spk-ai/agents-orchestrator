@@ -247,7 +247,10 @@ The mode requires a k8s-runner with `WORKLOAD_POD_SECURITY=restricted`, a
 digest-pinned `WORKLOAD_PROXY_IMAGE` the workload namespace can pull, and a
 task NetworkPolicy that allows only DNS and the Ziti controller and router.
 Unknown destinations fail closed, so every external host an environment needs
-(package registries included) must be an egress rule. Agent CLIs must honour
+(package registries included) must be an egress rule, unless the operator sets
+`WORKLOAD_PROXY_DIRECT_EGRESS=true`: the proxy then dials them directly, only
+to public addresses (`WORKLOAD_PROXY_DIRECT_DENY` adds addresses or CIDRs such
+as the node's public IP), and the task NetworkPolicy must allow that egress. Agent CLIs must honour
 `HTTPS_PROXY`/`NO_PROXY`; agynd's codex path still blanks proxy variables for
 `.agyn` LLM URLs, which the loopback forward avoids. Exposures (`agyn expose`)
 are not hosted in this mode yet.
