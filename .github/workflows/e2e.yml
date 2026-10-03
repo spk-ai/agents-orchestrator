@@ -9,7 +9,7 @@ on:
       k8s_runner_ref:
         description: k8s-runner ref to deploy from.
         required: false
-        default: 13921ea6affc091054a0df9be50df9c5ee315ef7
+        default: 1796887dcaeff085dab1cb8e59c4a85927fd7dd3
       agents_ref:
         description: Agents ref to deploy from.
         required: false
@@ -50,7 +50,7 @@ on:
 # Init images are resolved to the newest published release by the run-tests
 # action. Pinning one here opts this workflow out of every fix shipped after it.
 env:
-  K8S_RUNNER_REF: 0bf53883a3569b6c1b2b430eb81955ab7f1ab857
+  K8S_RUNNER_REF: 1796887dcaeff085dab1cb8e59c4a85927fd7dd3
   AGENTS_REF: df88f90f6aee77647912e7336e03d43545a2a6a4
   AUTHORIZATION_REF: 30581ca4f834ad8a0a63e14bd0f465333b3929e9
   RUNNERS_REF: 31df7a2fb51736ff2c0e05968c39636808596db5
@@ -70,8 +70,26 @@ concurrency:
 
 jobs:
   e2e:
+    name: e2e (${{ matrix.network }})
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    # tproxy is the upstream task network (NET_ADMIN tunneler, runner profile
+    # "none" with NET_ADMIN allowlisted) and runs every suite. explicit-proxy
+    # is the unprivileged workload-proxy under restricted Pod Security on an
+    # overlay-only NetworkPolicy; it runs real agent turns (agn and codex), a
+    # direct NET_ADMIN refusal and the live Pod/network negatives. MCP servers
+    # that install from public registries need egress rules there, so
+    # TestMCPToolsE2E and the full suites stay on the tproxy leg.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - network: tproxy
+            runner_pod_security: "WORKLOAD_POD_SECURITY=none WORKLOAD_ALLOWED_CAPABILITIES=NET_ADMIN"
+            focused: "TestAgentAgynCLIWaitToAnotherAgent|TestMCPToolsE2E|TestWorkloadStartRetryPolicyFastRetry"
+          - network: explicit-proxy
+            runner_pod_security: "WORKLOAD_POD_SECURITY=restricted WORKLOAD_ALLOWED_CAPABILITIES="
+            focused: "TestAgentAgynCLIWaitToAnotherAgent|TestWorkloadStartRetryPolicyFastRetry|TestRestrictedRunnerRefusesNetAdmin|TestRestrictedTaskPodAnswersAndHolds"
     steps:
       - name: Checkout service
         uses: actions/checkout@v4
@@ -816,6 +834,23 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.k8s_runner_ref || env.K8S_RUNNER_REF }}
           path: .e2e-deps/k8s-runner
 
+      # The pinned runner's own image ships /app/workload-proxy; built from
+      # the same checkout the runner is deployed from, loaded into the VM.
+      - name: Build the workload proxy image from the pinned runner
+        if: matrix.network == 'explicit-proxy'
+        working-directory: .e2e-deps/k8s-runner
+        run: |-
+          set -euo pipefail
+          image="e2e/workload-proxy:$(git rev-parse --short=12 HEAD)"
+          docker build --progress=plain -t "${image}" .
+          out="$(docker run --rm --read-only --user 10001:10001 --entrypoint /app/workload-proxy "${image}" no-such-command 2>&1 || true)"
+          grep -q 'unknown subcommand' <<<"${out}" || { echo "workload-proxy did not start as 10001 on a read-only root: ${out}" >&2; exit 1; }
+          agyn local load-image "${image}"
+          {
+            echo "WORKLOAD_PROXY_IMAGE=${image}"
+            echo "WORKLOAD_NETWORK_MODE=explicit-proxy"
+          } >> "${GITHUB_ENV}"
+
       - name: Install Helm
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
@@ -839,6 +874,8 @@ jobs:
 
       - name: Deploy k8s-runner from source
         working-directory: .e2e-deps/k8s-runner
+        env:
+          RUNNER_POD_SECURITY: ${{ matrix.runner_pod_security }}
         run: |-
           set -euo pipefail
           dump_k8s_runner_source_diagnostics() {
@@ -867,9 +904,10 @@ jobs:
           s = p.read_text()
           old = ('until kubectl logs -n ${K8S_RUNNER_NAMESPACE} -l "${LABEL_SELECTOR}" --tail=200 2>/dev/null | \\\n'
                  '      grep -q "gRPC server starting"; do')
-          assert s.count(old) == 1, 'pinned k8s-runner ready-log contract changed'
           new = old.replace('--tail=200', '--tail=-1').replace(
               'grep -q "gRPC server starting"', "awk '/gRPC server starting/ { found = 1 } END { exit !found }'")
+          # The pinned runner already drains the whole log itself.
+          assert s.count(old) + s.count(new) == 1, 'pinned k8s-runner ready-log contract changed'
           p.write_text(s.replace(old, new))
           # Two fits for this disposable VM's catalog; every other value stays
           # as pinned.
@@ -894,8 +932,21 @@ jobs:
           reserve = '  - name: ram-2gb\n    default: true\n    resources:\n      requestsCpu: "500m"\n'
           assert cs.count(reserve) == 1, 'pinned k8s-runner default flavor contract changed'
           c.write_text(cs.replace(reserve, reserve.replace('requestsCpu: "500m"', 'requestsCpu: "100m"')))
+          # The leg's workload Pod profile, set with the pinned deploy's own
+          # environment update so the source Pod starts with it.
+          import os
+          s = p.read_text()
+          sweep = 'WORKLOAD_SECRET_SWEEP_INTERVAL=15s WORKLOAD_SECRET_SWEEP_GRACE=1m\n'
+          assert s.count(sweep) == 1, 'pinned k8s-runner deploy environment contract changed'
+          p.write_text(s.replace(sweep, sweep[:-1] + ' ' + os.environ['RUNNER_POD_SECURITY'] + '\n'))
           PYCODE
           devspace run deploy
+          profile="$(kubectl logs -n agyn-platform -l app.kubernetes.io/name=k8s-runner --tail=-1 | awk '/workload pod security/ && !found { print; found = 1 }')"
+          echo "k8s-runner: ${profile}"
+          case "${RUNNER_POD_SECURITY}" in
+            WORKLOAD_POD_SECURITY=restricted*) grep -q '"profile":"restricted"' <<<"${profile}" ;;
+            *) grep -q '"profile":"none"' <<<"${profile}" && grep -q 'NET_ADMIN' <<<"${profile}" ;;
+          esac
 
       - name: Verify disposable VM native network inventory
         run: python3 .github/e2e/verify-vm-network.py
@@ -1401,6 +1452,12 @@ jobs:
           kubectl get pods -n agyn-platform -l app.kubernetes.io/name=llm-proxy -o wide >&2 || true
           kubectl logs "deployment/${deployment}" -n agyn-platform --all-containers --tail=500 >&2 || true
           exit 1
+      # After the Ziti preflights above, which run root busybox and tunnel
+      # images in agyn-workloads on purpose.
+      - name: Enforce restricted Pod Security and the overlay-only task network
+        if: matrix.network == 'explicit-proxy'
+        run: python3 .github/e2e/restricted-network.py prepare
+
       - name: Deploy orchestrator from source
         id: orchestrator_deploy
         run: devspace run deploy
@@ -1426,6 +1483,9 @@ jobs:
           node ../.github/scripts/patch-e2e-agent-instances.js
           python3 ../.e2e-deps/k8s-runner/.github/e2e/patch-native-client.py .
           cp ../.github/e2e/gateway_ziti_probe_test.go.txt suites/go-core/tests/gateway_ziti_probe_test.go
+          if [ "${{ matrix.network }}" = explicit-proxy ]; then
+            cp ../.github/e2e/restricted_network_test.go.txt suites/go-core/tests/restricted_network_test.go
+          fi
           cd suites/go-core
 
           protoc_bin="${RUNNER_TEMP}/go-core-protoc-gen"
@@ -1507,19 +1567,37 @@ jobs:
           service: agents_orchestrator
           include_smoke: "false"
 
+      # Checks the first live orchestrator-assembled task Pod while the
+      # focused tests drive real turns through it.
+      - name: Watch a live explicit-proxy task Pod
+        if: matrix.network == 'explicit-proxy'
+        run: nohup python3 .github/e2e/restricted-network.py watch >"${RUNNER_TEMP}/restricted-network-watch.log" 2>&1 &
+
       - name: Run focused go-core acceptance tests
         uses: ./e2e/.github/actions/run-tests
         env:
           E2E_SUITES: go-core
           E2E_ARTIFACT_NAME_SUFFIX: "-focused"
-          E2E_GO_TEST_RUN: "TestAgentAgynCLIWaitToAnotherAgent|TestMCPToolsE2E|TestWorkloadStartRetryPolicyFastRetry"
+          E2E_GO_TEST_RUN: ${{ matrix.focused }}
           E2E_SKIP_BUF_GENERATE: "true"
         with:
           e2e-ref: 435b549a937129b6858e7314648eb690894209fe
           service: agents_orchestrator
           include_smoke: "false"
 
+      - name: Verify restricted task Pod shape and network negatives
+        if: matrix.network == 'explicit-proxy' && !cancelled()
+        timeout-minutes: 25
+        run: |-
+          set +e
+          python3 .github/e2e/restricted-network.py verify
+          status=$?
+          echo "== watcher log =="
+          cat "${RUNNER_TEMP}/restricted-network-watch.log" || true
+          exit "${status}"
+
       - name: Run E2E tests
+        if: matrix.network == 'tproxy'
         uses: ./e2e/.github/actions/run-tests
         env:
           E2E_SUITES: go-core playwright-chat-app
@@ -1584,7 +1662,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ziti-diagnostics
+          name: ziti-diagnostics-${{ matrix.network }}
           path: ${{ runner.temp }}/ziti-diagnostics/
           if-no-files-found: warn
 

@@ -221,6 +221,30 @@ This is a resolver-routing correction, not an adversarial egress boundary:
 direct-IP traffic, custom resolvers, privileges and network policy require
 separate enforcement. Existing Pods are not rewritten by this change.
 
+## Unprivileged Task Networking (explicit-proxy)
+
+`WORKLOAD_NETWORK_MODE=explicit-proxy` replaces the NET_ADMIN tunneler with
+k8s-runner's `workload-proxy` so task Pods are admissible under Kubernetes
+restricted Pod Security. The assembly and its loopback port contract live in
+[overlay.go](internal/assembler/overlay.go); settings are documented in
+[chart values](charts/agents-orchestrator/values.yaml) and validated in
+[config.go](internal/config/config.go). The default remains `tproxy`.
+
+The mode requires a k8s-runner with `WORKLOAD_POD_SECURITY=restricted`, a
+digest-pinned `WORKLOAD_PROXY_IMAGE` the workload namespace can pull, and a
+task NetworkPolicy that allows only DNS and the Ziti controller and router.
+Unknown destinations fail closed, so every external host an environment needs
+(package registries included) must be an egress rule. Agent CLIs must honour
+`HTTPS_PROXY`/`NO_PROXY`; agynd's codex path still blanks proxy variables for
+`.agyn` LLM URLs, which the loopback forward avoids. Exposures (`agyn expose`)
+are not hosted in this mode yet.
+
+[Assembly fixtures](internal/assembler/overlay_test.go) are evaluated by the
+pinned v1.35 restricted evaluator in [hack/podcheck](hack/podcheck/podcheck_test.go).
+The E2E `explicit-proxy` leg enforces restricted admission on the disposable VM
+and checks a live task Pod; that is not a Kata, production CNI or image-pull
+acceptance.
+
 ## Local Development
 
 Full setup: https://github.com/agynio/architecture/blob/main/architecture/operations/local-development.md

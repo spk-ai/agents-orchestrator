@@ -122,6 +122,17 @@ env:
   # workload's first LLM stream dies mid-flight.
   - name: ZITI_SIDECAR_IMAGE
     value: "openziti/ziti-tunnel:2.0.0-pre10"
+  # Task Pod networking is not listed here, so extraEnvVars sets it without a
+  # duplicate entry. WORKLOAD_NETWORK_MODE defaults to "tproxy" (the NET_ADMIN
+  # tunneler above, which restricted Pod Security refuses). "explicit-proxy"
+  # runs k8s-runner's unprivileged workload-proxy instead and requires
+  # ZITI_ENABLED=true, an http:// AGENT_LLM_BASE_URL, a runner with
+  # WORKLOAD_POD_SECURITY=restricted, and WORKLOAD_PROXY_IMAGE (a k8s-runner
+  # image digest; WORKLOAD_PROXY_ENTRYPOINT defaults to /app/workload-proxy).
+  # The workload then reaches the gateway, llm-proxy and tracing through fixed
+  # loopback forwards (127.0.0.1:18443/18081/18444) and everything else through
+  # HTTP(S)_PROXY=http://127.0.0.1:18080; unknown destinations fail closed.
+  # The ZITI_*_RESOLVE_HOST/PORT and DNS upstream settings below are tproxy-only.
   - name: ZITI_MANAGEMENT_ADDRESS
     value: "ziti-management:50051"
   # Users, apps and agents group-sync against this service; with it off,

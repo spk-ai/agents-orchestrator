@@ -136,7 +136,22 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		// carries its own platform version rather than a ref to build from.
 		"./.e2e-tooling/.github/actions/provision-vm",
 		"ref: 435b549a937129b6858e7314648eb690894209fe",
-		"K8S_RUNNER_REF: 0bf53883a3569b6c1b2b430eb81955ab7f1ab857",
+		"K8S_RUNNER_REF: 1796887dcaeff085dab1cb8e59c4a85927fd7dd3",
+		// The explicit-proxy leg: the runner's own workload-proxy image,
+		// restricted admission and the overlay-only task policy, real agent
+		// turns, a direct NET_ADMIN refusal and the live Pod negatives.
+		"network: explicit-proxy",
+		`runner_pod_security: "WORKLOAD_POD_SECURITY=none WORKLOAD_ALLOWED_CAPABILITIES=NET_ADMIN"`,
+		`runner_pod_security: "WORKLOAD_POD_SECURITY=restricted WORKLOAD_ALLOWED_CAPABILITIES="`,
+		"pinned k8s-runner deploy environment contract changed",
+		"name: Build the workload proxy image from the pinned runner",
+		"run: python3 .github/e2e/restricted-network.py prepare",
+		"nohup python3 .github/e2e/restricted-network.py watch",
+		"python3 .github/e2e/restricted-network.py verify",
+		"cp ../.github/e2e/restricted_network_test.go.txt suites/go-core/tests/restricted_network_test.go",
+		"TestRestrictedRunnerRefusesNetAdmin",
+		"TestRestrictedTaskPodAnswersAndHolds",
+		"name: ziti-diagnostics-${{ matrix.network }}",
 		"github.event_name == 'workflow_dispatch' && inputs.k8s_runner_ref || env.K8S_RUNNER_REF",
 		// The source runner is patched in place over an older platform
 		// release, so the pinned chart's single-Namespace read is applied and
@@ -402,6 +417,56 @@ func setBaseEnv(t *testing.T) {
 	t.Setenv("LEASE_NAME", "")
 	t.Setenv("LEASE_NAMESPACE", "")
 	t.Setenv("EGRESS_CA_NAMESPACE", "")
+	t.Setenv("WORKLOAD_NETWORK_MODE", "")
+	t.Setenv("WORKLOAD_PROXY_IMAGE", "")
+	t.Setenv("WORKLOAD_PROXY_ENTRYPOINT", "")
+}
+
+func TestWorkloadNetworkModeDefaultsToTProxy(t *testing.T) {
+	setBaseEnv(t)
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WorkloadNetworkMode != WorkloadNetworkModeTProxy || cfg.WorkloadProxyEntrypoint != "/app/workload-proxy" {
+		t.Fatalf("defaults: mode %q entrypoint %q", cfg.WorkloadNetworkMode, cfg.WorkloadProxyEntrypoint)
+	}
+}
+
+func TestWorkloadNetworkModeExplicitProxy(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("ZITI_ENABLED", "true")
+	t.Setenv("WORKLOAD_NETWORK_MODE", " Explicit-Proxy ")
+	t.Setenv("WORKLOAD_PROXY_IMAGE", "ghcr.io/spk-ai/k8s-runner@sha256:abc")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WorkloadNetworkMode != WorkloadNetworkModeExplicitProxy || cfg.WorkloadProxyImage != "ghcr.io/spk-ai/k8s-runner@sha256:abc" {
+		t.Fatalf("explicit-proxy config: %#v", cfg)
+	}
+}
+
+// Each of these would otherwise assemble a Pod with no overlay, a broken
+// one, or silently fall back to the privileged tunneler.
+func TestWorkloadNetworkModeRejectsIncompleteConfig(t *testing.T) {
+	for name, env := range map[string]map[string]string{
+		"unknown mode":     {"ZITI_ENABLED": "true", "WORKLOAD_NETWORK_MODE": "transparent", "WORKLOAD_PROXY_IMAGE": "image"},
+		"no ziti":          {"ZITI_ENABLED": "false", "WORKLOAD_NETWORK_MODE": "explicit-proxy", "WORKLOAD_PROXY_IMAGE": "image"},
+		"no image":         {"ZITI_ENABLED": "true", "WORKLOAD_NETWORK_MODE": "explicit-proxy"},
+		"https llm":        {"ZITI_ENABLED": "true", "WORKLOAD_NETWORK_MODE": "explicit-proxy", "WORKLOAD_PROXY_IMAGE": "image", "AGENT_LLM_BASE_URL": "https://llm-proxy.agyn/v1"},
+		"relative command": {"ZITI_ENABLED": "true", "WORKLOAD_NETWORK_MODE": "explicit-proxy", "WORKLOAD_PROXY_IMAGE": "image", "WORKLOAD_PROXY_ENTRYPOINT": "workload-proxy"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setBaseEnv(t)
+			for key, value := range env {
+				t.Setenv(key, value)
+			}
+			if _, err := FromEnv(); err == nil {
+				t.Fatal("incomplete explicit-proxy configuration accepted")
+			}
+		})
+	}
 }
 
 func TestFromEnvAgyndDirectAddresses(t *testing.T) {
