@@ -179,6 +179,24 @@ func TestExplicitProxyOverlayContainers(t *testing.T) {
 	}
 }
 
+func TestExplicitProxyDirectEgressFlags(t *testing.T) {
+	cfg := overlayTestConfig(config.WorkloadNetworkModeExplicitProxy)
+	cfg.WorkloadProxyDirectEgress = true
+	cfg.WorkloadProxyDirectDeny = []string{"95.216.29.229", "203.0.113.0/24"}
+	request := assembleOverlayAgent(t, cfg).Request
+	sidecar := testutil.FindInitContainer(request.InitContainers, ZitiSidecarContainerName)
+	wantServe := []string{"serve", "--identity", "/netfoundry/agent.json", "--listen", "127.0.0.1:18080",
+		"--forward", "127.0.0.1:18443=gateway.agyn:443", "--forward", "127.0.0.1:18081=llm-proxy.agyn:80", "--forward", "127.0.0.1:18444=tracing.agyn:443",
+		"--direct-egress", "--direct-deny", "95.216.29.229", "--direct-deny", "203.0.113.0/24"}
+	if !slices.Equal(sidecar.GetCmd(), wantServe) {
+		t.Fatalf("serve command %v", sidecar.GetCmd())
+	}
+	wait := testutil.FindInitContainer(request.InitContainers, zitiWaitContainerName)
+	if slices.Contains(wait.GetCmd(), "--tripwire") {
+		t.Fatal("direct egress must keep the built-in readiness tripwires")
+	}
+}
+
 func TestExplicitProxyWorkloadEnv(t *testing.T) {
 	request := assembleOverlayAgent(t, overlayTestConfig(config.WorkloadNetworkModeExplicitProxy),
 		userEnv("HTTP_PROXY", "http://attacker.example:3128"),

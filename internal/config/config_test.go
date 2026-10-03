@@ -447,6 +447,37 @@ func TestWorkloadNetworkModeExplicitProxy(t *testing.T) {
 	}
 }
 
+func TestWorkloadProxyDirectEgress(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("ZITI_ENABLED", "true")
+	t.Setenv("WORKLOAD_NETWORK_MODE", "explicit-proxy")
+	t.Setenv("WORKLOAD_PROXY_IMAGE", "image")
+	t.Setenv("WORKLOAD_PROXY_DIRECT_EGRESS", "true")
+	t.Setenv("WORKLOAD_PROXY_DIRECT_DENY", " 95.216.29.229 , 203.0.113.0/24,")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.WorkloadProxyDirectEgress || strings.Join(cfg.WorkloadProxyDirectDeny, ",") != "95.216.29.229,203.0.113.0/24" {
+		t.Fatalf("direct egress config: %v %v", cfg.WorkloadProxyDirectEgress, cfg.WorkloadProxyDirectDeny)
+	}
+	for name, env := range map[string]map[string]string{
+		"not a bool":    {"WORKLOAD_PROXY_DIRECT_EGRESS": "yes please"},
+		"bad deny":      {"WORKLOAD_PROXY_DIRECT_DENY": "node"},
+		"deny without":  {"WORKLOAD_PROXY_DIRECT_EGRESS": "false"},
+		"tproxy direct": {"WORKLOAD_NETWORK_MODE": "tproxy", "WORKLOAD_PROXY_DIRECT_DENY": ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for key, value := range env {
+				t.Setenv(key, value)
+			}
+			if _, err := FromEnv(); err == nil {
+				t.Fatal("invalid direct egress configuration accepted")
+			}
+		})
+	}
+}
+
 // Each of these would otherwise assemble a Pod with no overlay, a broken
 // one, or silently fall back to the privileged tunneler.
 func TestWorkloadNetworkModeRejectsIncompleteConfig(t *testing.T) {

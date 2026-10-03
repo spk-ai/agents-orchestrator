@@ -202,6 +202,12 @@ func (a *Assembler) explicitProxyOverlay() (*overlayPlan, error) {
 		}
 		serve = append(serve, "--forward", tracingForwardListen+"="+tracing)
 	}
+	if a.cfg.WorkloadProxyDirectEgress {
+		serve = append(serve, "--direct-egress")
+		for _, deny := range a.cfg.WorkloadProxyDirectDeny {
+			serve = append(serve, "--direct-deny", deny)
+		}
+	}
 	identityMount := []*runnerv1.VolumeMount{{Volume: zitiIdentityVolumeName, MountPath: zitiIdentityMountPath}}
 	readOnly := func(extra map[string]string) map[string]string {
 		properties := map[string]string{readOnlyRootFilesystemKey: "true"}
