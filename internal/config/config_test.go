@@ -201,6 +201,7 @@ func TestZitiWorkflowKeepsSourceOfTruthRefsAndDnsValidation(t *testing.T) {
 		// orchestrator, so the default-profile suites keep their retry timing.
 		"cp ../.github/e2e/failed_workload_retention_test.go.txt suites/go-core/tests/failed_workload_retention_test.go",
 		"name: Redeploy orchestrator with failed-workload retention",
+		"python3 .github/e2e/free-workload-memory.py 1024",
 		"FAILED_WORKLOAD_RETENTION: 90s",
 		`E2E_GO_TEST_RUN: "^TestFailedWorkloadRetentionKeepsPodAndEvidence$"`,
 		"tag: failed_workload_retention",

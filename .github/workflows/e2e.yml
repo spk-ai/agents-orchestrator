@@ -1621,6 +1621,10 @@ jobs:
           FAILED_WORKLOAD_RETENTION_MAX: "1"
         run: |-
           set -euo pipefail
+          # The default-profile suites can leave workload Pods that fill the
+          # VM's memory requests; the redeployed orchestrator (256Mi) and the
+          # test's own workload (512Mi) must both schedule.
+          python3 .github/e2e/free-workload-memory.py 1024
           devspace run deploy
           kubectl logs -n agyn-platform -l app.kubernetes.io/name=agents-orchestrator --tail=-1 |
             grep -F 'orchestrator: retaining up to 1 failed workload Pod(s) for 1m30s each'
