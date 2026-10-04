@@ -234,7 +234,15 @@ func run() error {
 		StopInactiveInstances:     cfg.StopInactiveInstances,
 		MeteringSampleInterval:    cfg.MeteringSampleInterval,
 		PlatformIdentityID:        cfg.PlatformIdentityID,
+		FailedWorkloads: reconciler.FailedWorkloadConfig{
+			Retention:        cfg.FailedWorkloadRetention,
+			RetentionMax:     cfg.FailedWorkloadRetentionMax,
+			EvidenceLogBytes: cfg.FailedWorkloadEvidenceLogBytes,
+		},
 	})
+	if cfg.FailedWorkloadRetention > 0 && cfg.FailedWorkloadRetentionMax > 0 {
+		log.Printf("orchestrator: retaining up to %d failed workload Pod(s) for %s each", cfg.FailedWorkloadRetentionMax, cfg.FailedWorkloadRetention)
+	}
 	if imageProxyClient != nil {
 		reconciler.WithImageProxy(imageProxyClient, cfg.ImageProxyHost)
 	}

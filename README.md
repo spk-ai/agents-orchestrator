@@ -133,6 +133,19 @@ receipt. Callers must observe removal and reconcile possible side effects before
 resuming interrupted work. This is an operator policy, not an exactly-once
 execution guarantee or a new public cancellation API.
 
+## Failed Workload Retention And Evidence (Opt-in Retention)
+
+Every failure path records which check failed (start check, health check,
+start deadline, runtime check, prepared start or a runner-reported Pod failure)
+in `failure_reason`/`failure_message` and logs it. Before a failed prepared
+workload's Pod is removed, its final container statuses and redacted output
+tails are stored on the workload record. `FAILED_WORKLOAD_RETENTION` (default
+`0`) keeps up to `FAILED_WORKLOAD_RETENTION_MAX` failed agent Pods for
+investigation first. Decisions live in
+[failed_retention.go](internal/reconciler/failed_retention.go), evidence and
+redaction in [failure_evidence.go](internal/reconciler/failure_evidence.go);
+operations are in [FAILED-WORKLOAD-RETENTION.md](FAILED-WORKLOAD-RETENTION.md).
+
 ## Opt-in compute resource bounds
 
 Allocation and validation live in [assembler.go](internal/assembler/assembler.go)

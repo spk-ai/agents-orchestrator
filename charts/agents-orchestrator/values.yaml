@@ -192,6 +192,18 @@ env:
     value: "30s"
   - name: STOP_TIMEOUT_SEC
     value: ""
+  # Keep a failed agent workload's Pod for investigation (Go duration, at most
+  # 24h; "0" removes it at once). A retained Pod keeps its capacity slot and its
+  # agent instance is not restarted until it is removed. Evidence (final
+  # container statuses and redacted output tails) is stored on the workload
+  # record either way; 0 bytes records statuses only. See
+  # FAILED-WORKLOAD-RETENTION.md.
+  - name: FAILED_WORKLOAD_RETENTION
+    value: "0"
+  - name: FAILED_WORKLOAD_RETENTION_MAX
+    value: "1"
+  - name: FAILED_WORKLOAD_EVIDENCE_LOG_BYTES
+    value: "65536"
   - name: LEASE_NAME
     value: ""
   # The CA lives beside this service, so the release namespace is the answer in

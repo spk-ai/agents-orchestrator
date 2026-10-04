@@ -27,9 +27,14 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
+// markWorkloadFailed records why a workload failed -- which check failed and
+// on what -- and logs it. failure_message is bounded and redacted: Runners
+// publishes it with workload notifications.
 func (r *Reconciler) markWorkloadFailed(ctx context.Context, workloadID string, instanceID *string, reason runnersv1.WorkloadFailureReason, message string, containers []*runnersv1.Container) {
 	status := runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED
 	reasonValue := reason
+	message = boundFailureMessage(message)
+	log.Printf("reconciler: workload %s failed (%s): %s", workloadID, reason, message)
 	req := &runnersv1.UpdateWorkloadRequest{
 		Id:            workloadID,
 		Status:        &status,

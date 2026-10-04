@@ -1,0 +1,236 @@
+//go:build e2e && svc_agents_orchestrator && failed_workload_retention
+
+package tests
+
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	agentsv1 "github.com/agynio/e2e/suites/go-core/.gen/go/agynio/api/agents/v1"
+	llmv1 "github.com/agynio/e2e/suites/go-core/.gen/go/agynio/api/llm/v1"
+	runnerv1 "github.com/agynio/e2e/suites/go-core/.gen/go/agynio/api/runner/v1"
+	runnersv1 "github.com/agynio/e2e/suites/go-core/.gen/go/agynio/api/runners/v1"
+	threadsv1 "github.com/agynio/e2e/suites/go-core/.gen/go/agynio/api/threads/v1"
+	"github.com/google/uuid"
+)
+
+// Runs only against an orchestrator redeployed with FAILED_WORKLOAD_RETENTION
+// set (the failed_workload_retention build tag): retention holds a failed
+// start, which the default-profile suites must not wait out.
+const (
+	// Must match FAILED_WORKLOAD_RETENTION in .github/workflows/e2e.yml.
+	retainedFailureWindow = 90 * time.Second
+	// Two reconcile ticks of slack for clock skew and observation lag.
+	retainedFailureSlack = 20 * time.Second
+
+	retainedFailureTestTimeout = 12 * time.Minute
+	retainedFailurePoll        = 2 * time.Second
+	retainedFailureImage       = "INVALID_RETENTION_IMAGE_NAME:latest"
+)
+
+var retainedEvidenceJWT = regexp.MustCompile(`eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`)
+
+func TestFailedWorkloadRetentionKeepsPodAndEvidence(t *testing.T) {
+	logStep := startTimingBreadcrumbs(t)
+	ctx, cancel := context.WithTimeout(context.Background(), retainedFailureTestTimeout)
+	t.Cleanup(cancel)
+
+	agentsClient := agentsv1.NewAgentsServiceClient(dialGRPC(t, agentsAddr))
+	threadsClient := threadsv1.NewThreadsServiceClient(dialGRPC(t, threadsAddr))
+	runnerClient := runnerv1.NewRunnerServiceClient(dialRunnerGRPC(t, runnerAddr))
+	runnersClient := runnersv1.NewRunnersServiceClient(dialGRPC(t, runnersAddr))
+
+	setup := newWorkflowGatewaySetup(t, ctx)
+	identityID, threadsCtx, orgID := setup.IdentityID, setup.Context, setup.OrganizationID
+	modelID := createWorkflowGatewayModel(t, setup, testLLMEndpointCodex, llmv1.Protocol_PROTOCOL_RESPONSES, "simple-hello")
+
+	// The workspace image cannot be pulled, so the start check fails the
+	// workload once START_GRACE has passed: a deterministic failure whose
+	// sidecars and init containers still ran and left output.
+	environmentID := newSuiteEnvironment(t, threadsCtx, agentsClient, orgID, codexRuntime, retainedFailureImage)
+	name := fmt.Sprintf("e2e-retained-failure-%s", uuid.NewString())
+	agent := createAgentWithOptions(t, threadsCtx, agentsClient, agentCreateOptions{
+		Name: name, Nickname: nicknameFor(name), Model: modelID, OrganizationID: orgID, EnvironmentID: environmentID,
+	})
+	agentID := agent.GetMeta().GetId()
+	if agentID == "" {
+		t.Fatal("create agent: missing id")
+	}
+	t.Cleanup(func() {
+		cleanupAgentEnvs(t, threadsCtx, agentsClient, orgID, agentID)
+		deleteAgent(t, threadsCtx, agentsClient, orgID, agentID)
+	})
+	createAgentEnv(t, threadsCtx, agentsClient, agentID, "LLM_API_TOKEN", setup.Token)
+	thread := createThread(t, threadsCtx, threadsClient, orgID, []string{identityID, agentID})
+	t.Cleanup(func() { archiveThread(t, threadsCtx, threadsClient, thread.GetId()) })
+	labels := map[string]string{labelManagedBy: managedByValue, labelAgentID: agentID, labelThreadID: thread.GetId()}
+	t.Cleanup(func() {
+		ids, err := findWorkloadsByLabels(context.Background(), runnerClient, labels)
+		if err != nil {
+			t.Logf("cleanup: find workloads: %v", err)
+			return
+		}
+		for _, id := range ids {
+			cleanupWorkload(t, context.Background(), runnerClient, id)
+		}
+	})
+	sendMessage(t, threadsCtx, threadsClient, thread.GetId(), identityID, "hello")
+	instanceID := waitForAgentInstance(t, threadsCtx, agentsClient, orgID, agentID)
+	logStep("failing_start_requested")
+
+	// 1. The failure is recorded with the check that failed, and the Pod is kept.
+	var failed *runnersv1.Workload
+	if err := pollUntil(ctx, retainedFailurePoll, func(ctx context.Context) error {
+		workloads, err := listWorkloadsByInstance(ctx, runnersClient, instanceID, []runnersv1.WorkloadStatus{runnersv1.WorkloadStatus_WORKLOAD_STATUS_FAILED})
+		if err != nil {
+			return err
+		}
+		if len(workloads) == 0 {
+			return fmt.Errorf("no failed workload yet")
+		}
+		failed = workloads[0]
+		return nil
+	}); err != nil {
+		t.Fatalf("wait for the failed workload: %v", err)
+	}
+	failedID := failed.GetMeta().GetId()
+	if failed.GetFailureReason() != runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_CONFIG_INVALID ||
+		!strings.HasPrefix(failed.GetFailureMessage(), "start check: ") || !strings.Contains(failed.GetFailureMessage(), "be created") ||
+		failed.GetRemovedAt() == nil || failed.GetRemovalConfirmedAt() != nil {
+		t.Fatalf("failure not recorded precisely: reason=%s message=%q removed_at=%v confirmed=%v",
+			failed.GetFailureReason(), failed.GetFailureMessage(), failed.GetRemovedAt(), failed.GetRemovalConfirmedAt())
+	}
+	failedAt := failed.GetRemovedAt().AsTime()
+	t.Logf("workload %s failed at %s: %s", failedID, failedAt.Format(time.RFC3339), failed.GetFailureMessage())
+	logStep("failure_recorded")
+
+	// 2. Retained for the window: the Pod stays, removal is unconfirmed and the
+	// instance is not started a second time.
+	retainedUntil := failedAt.Add(retainedFailureWindow - retainedFailureSlack)
+	observations, evidenceWhileRetained := 0, false
+	for time.Now().Before(retainedUntil) {
+		current, err := runnersClient.GetWorkload(ctx, &runnersv1.GetWorkloadRequest{Id: failedID})
+		if err != nil {
+			t.Fatalf("get retained workload: %v", err)
+		}
+		if current.GetWorkload().GetRemovalConfirmedAt() != nil {
+			t.Fatalf("failed workload removed %s after failing, inside the %s retention window", time.Since(failedAt), retainedFailureWindow)
+		}
+		for _, container := range current.GetWorkload().GetContainers() {
+			evidenceWhileRetained = evidenceWhileRetained || container.OutputTail != nil
+		}
+		gone, err := runnerWorkloadGone(ctx, runnerClient, failedID)
+		if err != nil {
+			t.Fatalf("inspect retained Pod: %v", err)
+		}
+		if gone {
+			t.Fatalf("retained Pod deleted %s after failing", time.Since(failedAt))
+		}
+		workloads, err := listWorkloadsByInstance(ctx, runnersClient, instanceID, nil)
+		if err != nil {
+			t.Fatalf("list instance workloads: %v", err)
+		}
+		if len(workloads) != 1 {
+			t.Fatalf("instance started again while its failed Pod is retained: %d workloads", len(workloads))
+		}
+		observations++
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(5 * time.Second):
+		}
+	}
+	if observations < 3 {
+		t.Fatalf("retention observed only %d times; the failure was reported too late to check the window", observations)
+	}
+	if !evidenceWhileRetained {
+		t.Fatal("evidence was not readable while the Pod was retained")
+	}
+	logStep("pod_retained")
+
+	// 3. Removed after the window, through the normal confirmed removal.
+	var removed *runnersv1.Workload
+	if err := pollUntil(ctx, retainedFailurePoll, func(ctx context.Context) error {
+		current, err := runnersClient.GetWorkload(ctx, &runnersv1.GetWorkloadRequest{Id: failedID})
+		if err != nil {
+			return err
+		}
+		if current.GetWorkload().GetRemovalConfirmedAt() == nil {
+			return fmt.Errorf("removal not confirmed")
+		}
+		gone, err := runnerWorkloadGone(ctx, runnerClient, failedID)
+		if err != nil || !gone {
+			return fmt.Errorf("pod still present: %v", err)
+		}
+		removed = current.GetWorkload()
+		return nil
+	}); err != nil {
+		t.Fatalf("wait for removal after retention: %v", err)
+	}
+	if confirmed := removed.GetRemovalConfirmedAt().AsTime(); confirmed.Before(failedAt.Add(retainedFailureWindow - retainedFailureSlack)) {
+		t.Fatalf("removed %s after failing, before the %s window ended", confirmed.Sub(failedAt), retainedFailureWindow)
+	}
+	logStep("pod_removed")
+
+	// 4. Evidence survives the Pod: final statuses and redacted output tails,
+	// read with GetWorkload; list responses leave the tails out.
+	if len(removed.GetContainers()) == 0 {
+		t.Fatal("no container evidence recorded")
+	}
+	read, mainSeen := 0, false
+	for _, container := range removed.GetContainers() {
+		if container.OutputTail == nil {
+			t.Fatalf("container %s has no output evidence", container.GetName())
+		}
+		tail := container.GetOutputTail()
+		if retainedEvidenceJWT.MatchString(tail) || retainedEvidenceJWT.MatchString(container.GetMessage()) {
+			t.Fatalf("container %s evidence holds an unredacted token", container.GetName())
+		}
+		if !strings.HasPrefix(tail, "[output unavailable") {
+			read++
+		}
+		if container.GetRole() == runnersv1.ContainerRole_CONTAINER_ROLE_MAIN {
+			mainSeen = true
+			if _, ok := configInvalidContainerReasons[container.GetReason()]; !ok || container.GetStatus() != runnersv1.ContainerStatus_CONTAINER_STATUS_WAITING {
+				t.Fatalf("main container final status not recorded: %s %q", container.GetStatus(), container.GetReason())
+			}
+		}
+		t.Logf("evidence: %s %s %s %q, %d bytes of output", container.GetRole(), container.GetName(), container.GetStatus(), container.GetReason(), len(tail))
+	}
+	if !mainSeen || read == 0 {
+		t.Fatalf("evidence incomplete: main=%t containers read=%d", mainSeen, read)
+	}
+	listed, err := listWorkloadsByInstance(ctx, runnersClient, instanceID, nil)
+	if err != nil {
+		t.Fatalf("list instance workloads: %v", err)
+	}
+	for _, workload := range listed {
+		for _, container := range workload.GetContainers() {
+			if container.OutputTail != nil {
+				t.Fatalf("list response carried output_tail for %s", workload.GetMeta().GetId())
+			}
+		}
+	}
+	logStep("evidence_checked")
+
+	// 5. The instance is retried once the window has passed.
+	if err := pollUntil(ctx, retainedFailurePoll, func(ctx context.Context) error {
+		workloads, err := listWorkloadsByInstance(ctx, runnersClient, instanceID, nil)
+		if err != nil {
+			return err
+		}
+		for _, workload := range workloads {
+			if workload.GetMeta().GetId() != failedID && workload.GetMeta().GetCreatedAt().AsTime().After(failedAt) {
+				return nil
+			}
+		}
+		return fmt.Errorf("no retry after the retention window")
+	}); err != nil {
+		t.Fatalf("instance not retried after retention: %v", err)
+	}
+	logStep("instance_retried")
+}

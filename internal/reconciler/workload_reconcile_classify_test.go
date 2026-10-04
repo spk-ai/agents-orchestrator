@@ -72,7 +72,9 @@ func TestClassifyStartingContainersInitConfigInvalid(t *testing.T) {
 	if failure.reason != runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_CONFIG_INVALID {
 		t.Fatalf("unexpected failure reason: %v", failure.reason)
 	}
-	if failure.message != "bad init" {
+	// The record names the check, the container and its state, then the
+	// runtime's own detail.
+	if failure.message != `start check: init container "" cannot be created (state=WAITING reason=CreateContainerConfigError restarts=0): bad init` {
 		t.Fatalf("unexpected failure message: %s", failure.message)
 	}
 }
@@ -99,7 +101,7 @@ func TestClassifyStartingContainersTerminatedInitConfigInvalid(t *testing.T) {
 	if failure.reason != runnersv1.WorkloadFailureReason_WORKLOAD_FAILURE_REASON_CONFIG_INVALID {
 		t.Fatalf("unexpected failure reason: %v", failure.reason)
 	}
-	if failure.message != "invalid image reference" {
+	if failure.message != `start check: init container "" cannot be created (state=TERMINATED reason=InvalidImageName exit=1 restarts=0): invalid image reference` {
 		t.Fatalf("unexpected failure message: %s", failure.message)
 	}
 }

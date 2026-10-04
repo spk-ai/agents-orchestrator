@@ -82,6 +82,12 @@ functions:
                   value: "__WORKLOAD_NETWORK_MODE__"
                 - name: WORKLOAD_PROXY_IMAGE
                   value: "__WORKLOAD_PROXY_IMAGE__"
+                # Off unless the caller asks: the E2E enables retention only
+                # for its retention test, after the default-profile suites.
+                - name: FAILED_WORKLOAD_RETENTION
+                  value: "__FAILED_WORKLOAD_RETENTION__"
+                - name: FAILED_WORKLOAD_RETENTION_MAX
+                  value: "__FAILED_WORKLOAD_RETENTION_MAX__"
                 - name: ZITI_ENROLLMENT_CONTROLLER_RESOLVE_HOST
                   value: "__ZITI_ENROLLMENT_CONTROLLER_RESOLVE_HOST__"
                 - name: ZITI_ENROLLMENT_CONTROLLER_PORT
@@ -171,6 +177,8 @@ functions:
     patch="${patch/__AGYND_RUNNERS_DIRECT_ADDRESS__/${AGYND_RUNNERS_DIRECT_ADDRESS:-}}"
     patch="${patch/__WORKLOAD_NETWORK_MODE__/${WORKLOAD_NETWORK_MODE:-tproxy}}"
     patch="${patch/__WORKLOAD_PROXY_IMAGE__/${WORKLOAD_PROXY_IMAGE:-}}"
+    patch="${patch/__FAILED_WORKLOAD_RETENTION__/${FAILED_WORKLOAD_RETENTION:-0}}"
+    patch="${patch/__FAILED_WORKLOAD_RETENTION_MAX__/${FAILED_WORKLOAD_RETENTION_MAX:-1}}"
     kubectl patch deployment agents-orchestrator -n ${ORCHESTRATOR_NAMESPACE} --type strategic --patch "${patch}"
   wait_for_orchestrator: |-
     echo "Waiting for orchestrator deployment to roll out..."
