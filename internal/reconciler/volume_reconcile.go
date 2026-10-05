@@ -349,7 +349,12 @@ func (r *Reconciler) handlePresentRunnerVolume(ctx context.Context, runnerClient
 			return err
 		}
 		if !expired {
-			return nil
+			released, err := r.deletedInstanceReleasesVolume(ctx, volume, instanceCache)
+			if err != nil || !released {
+				return err
+			}
+			log.Printf("reconciler: agent instance %s was deleted and holds no workload; removing its volume %s (%s)",
+				volumeOwnerInstanceID(volume), volume.GetMeta().GetId(), volume.GetBoundInstance().GetInstanceId())
 		}
 		_, err = r.advanceVolumeRemoval(ctx, runnerClient, volume)
 		return err
@@ -359,6 +364,57 @@ func (r *Reconciler) handlePresentRunnerVolume(ctx context.Context, runnerClient
 	default:
 		return nil
 	}
+}
+
+// volumeOwnerInstanceID names the agent instance that owns a volume, or "" when
+// the record names only a sandbox or an agent class.
+func volumeOwnerInstanceID(volume *runnersv1.Volume) string {
+	if isSandboxVolume(volume) {
+		return ""
+	}
+	if volume.GetOwnerKind() == runnersv1.RuntimeOwnerKind_RUNTIME_OWNER_KIND_AGENT_INSTANCE {
+		if ownerID := strings.TrimSpace(volume.GetOwnerId()); ownerID != "" {
+			return ownerID
+		}
+	}
+	return strings.TrimSpace(volume.GetAgentInstanceId())
+}
+
+// deletedInstanceReleasesVolume reports whether an agent volume's owner was
+// deleted (DeleteInstance leaves it TERMINATED) and no workload still holds the
+// disk. The agents service never pauses or resumes a TERMINATED instance, so no
+// later workload can mount that workspace and the volume needs no TTL to go.
+// Only an identity-matched TERMINATED read is a removal permit: a read failure,
+// NotFound, a mismatched or class-only owner, or any unconfirmed workload
+// retains the disk.
+func (r *Reconciler) deletedInstanceReleasesVolume(ctx context.Context, volume *runnersv1.Volume, instanceCache map[string]instanceActivity) (bool, error) {
+	instanceID := volumeOwnerInstanceID(volume)
+	if instanceID == "" {
+		return false, nil
+	}
+	// An internal read without a caller identity, as desired-state listing does:
+	// the agents service serves instance reads to the platform's own callers.
+	response, err := r.agents.GetInstance(ctx, &agentsv1.GetInstanceRequest{Id: instanceID})
+	if err != nil {
+		return false, fmt.Errorf("read owner instance %s of volume %s: %w", instanceID, volume.GetMeta().GetId(), err)
+	}
+	instance := response.GetInstance()
+	classID := volume.GetAgentClassId()
+	if classID == "" {
+		classID = volume.GetAgentId()
+	}
+	if instance.GetMeta().GetId() != instanceID || instance.GetOrganizationId() != volume.GetOrganizationId() ||
+		classID != "" && instance.GetAgentId() != classID {
+		return false, fmt.Errorf("owner instance %s of volume %s has a mismatched identity", instanceID, volume.GetMeta().GetId())
+	}
+	if instance.GetState() != agentsv1.AgentInstanceState_AGENT_INSTANCE_STATE_TERMINATED {
+		return false, nil
+	}
+	activity, err := r.agentInstanceActivity(ctx, instanceID, instanceCache)
+	if err != nil {
+		return false, err
+	}
+	return !activity.hasActive, nil
 }
 
 func (r *Reconciler) volumeTTLExpired(ctx context.Context, volume *runnersv1.Volume, volumeInfoCache map[string]volumeTTLInfo, instanceCache map[string]instanceActivity) (bool, error) {
