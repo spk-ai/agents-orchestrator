@@ -462,12 +462,12 @@ func TestWorkloadProxyDirectEgress(t *testing.T) {
 	t.Setenv("WORKLOAD_NETWORK_MODE", "explicit-proxy")
 	t.Setenv("WORKLOAD_PROXY_IMAGE", "image")
 	t.Setenv("WORKLOAD_PROXY_DIRECT_EGRESS", "true")
-	t.Setenv("WORKLOAD_PROXY_DIRECT_DENY", " 95.216.29.229 , 203.0.113.0/24,")
+	t.Setenv("WORKLOAD_PROXY_DIRECT_DENY", " 198.51.100.7 , 203.0.113.0/24,")
 	cfg, err := FromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.WorkloadProxyDirectEgress || strings.Join(cfg.WorkloadProxyDirectDeny, ",") != "95.216.29.229,203.0.113.0/24" {
+	if !cfg.WorkloadProxyDirectEgress || strings.Join(cfg.WorkloadProxyDirectDeny, ",") != "198.51.100.7,203.0.113.0/24" {
 		t.Fatalf("direct egress config: %v %v", cfg.WorkloadProxyDirectEgress, cfg.WorkloadProxyDirectDeny)
 	}
 	for name, env := range map[string]map[string]string{
