@@ -425,6 +425,9 @@ func setBaseEnv(t *testing.T) {
 	t.Setenv("STOP_TIMEOUT_SEC", "")
 	t.Setenv("LEASE_NAME", "")
 	t.Setenv("LEASE_NAMESPACE", "")
+	t.Setenv("LEADER_ELECTION_LEASE_DURATION", "")
+	t.Setenv("LEADER_ELECTION_RENEW_DEADLINE", "")
+	t.Setenv("LEADER_ELECTION_RETRY_PERIOD", "")
 	t.Setenv("EGRESS_CA_NAMESPACE", "")
 	t.Setenv("WORKLOAD_NETWORK_MODE", "")
 	t.Setenv("WORKLOAD_PROXY_IMAGE", "")
@@ -724,6 +727,61 @@ func TestFailedWorkloadRetentionSettings(t *testing.T) {
 			}
 			if cfg.FailedWorkloadRetention != test.wantRetention || cfg.FailedWorkloadRetentionMax != test.wantMax || cfg.FailedWorkloadEvidenceLogBytes != test.wantLogBytes {
 				t.Fatalf("got %s %d %d", cfg.FailedWorkloadRetention, cfg.FailedWorkloadRetentionMax, cfg.FailedWorkloadEvidenceLogBytes)
+			}
+		})
+	}
+}
+
+// Unset, the Lease keeps the timings this service always used.
+func TestLeaderElectionDefaultsKeepCurrentTimings(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("ZITI_ENABLED", "false")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := LeaderElectionTimings{LeaseDuration: 15 * time.Second, RenewDeadline: 10 * time.Second, RetryPeriod: 2 * time.Second}
+	if cfg.LeaderElection != want {
+		t.Fatalf("got %+v, want %+v", cfg.LeaderElection, want)
+	}
+}
+
+func TestLeaderElectionSettings(t *testing.T) {
+	for _, test := range []struct {
+		lease, renew, retry string
+		wantErr             string
+		want                LeaderElectionTimings
+	}{
+		{lease: "120s", renew: "90s", retry: "10s", want: LeaderElectionTimings{120 * time.Second, 90 * time.Second, 10 * time.Second}},
+		{lease: "2m", renew: "1m30s", retry: "10s", want: LeaderElectionTimings{120 * time.Second, 90 * time.Second, 10 * time.Second}},
+		// Only the lease lengthened: the defaults fill in the rest.
+		{lease: "30s", want: LeaderElectionTimings{30 * time.Second, 10 * time.Second, 2 * time.Second}},
+		{lease: "soon", wantErr: "parse LEADER_ELECTION_LEASE_DURATION"},
+		{renew: "0s", wantErr: "LEADER_ELECTION_RENEW_DEADLINE must be greater than 0"},
+		{retry: "-1s", wantErr: "LEADER_ELECTION_RETRY_PERIOD must be greater than 0"},
+		{lease: "120m", wantErr: "LEADER_ELECTION_LEASE_DURATION must be greater than 0 and at most 10m0s"},
+		{lease: "90s", renew: "90s", retry: "10s", wantErr: "LEADER_ELECTION_LEASE_DURATION (1m30s) must be greater than LEADER_ELECTION_RENEW_DEADLINE (1m30s)"},
+		{renew: "12s", retry: "10s", wantErr: "LEADER_ELECTION_RENEW_DEADLINE (12s) must be greater than 1.2 x LEADER_ELECTION_RETRY_PERIOD (10s)"},
+		{lease: "120s", renew: "10s", retry: "10s", wantErr: "must be greater than 1.2 x LEADER_ELECTION_RETRY_PERIOD"},
+	} {
+		t.Run(test.lease+"/"+test.renew+"/"+test.retry, func(t *testing.T) {
+			setBaseEnv(t)
+			t.Setenv("ZITI_ENABLED", "false")
+			t.Setenv("LEADER_ELECTION_LEASE_DURATION", test.lease)
+			t.Setenv("LEADER_ELECTION_RENEW_DEADLINE", test.renew)
+			t.Setenv("LEADER_ELECTION_RETRY_PERIOD", test.retry)
+			cfg, err := FromEnv()
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("expected %q, got %v", test.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.LeaderElection != test.want {
+				t.Fatalf("got %+v, want %+v", cfg.LeaderElection, test.want)
 			}
 		})
 	}

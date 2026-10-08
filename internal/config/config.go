@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"k8s.io/client-go/tools/leaderelection"
 )
 
 const (
@@ -80,7 +81,10 @@ type Config struct {
 	StopInactiveInstances     bool
 	LeaseName                 string
 	LeaseNamespace            string
-	EgressCANamespace         string
+	// LeaderElection holds the timings of the agents-orchestrator Lease; see
+	// LeaderElectionTimings.
+	LeaderElection    LeaderElectionTimings
+	EgressCANamespace string
 	// PlatformIdentityID is the identity this process acts as when it calls a
 	// service that authorizes its caller. Identity registers it from the same
 	// value and grants it admin on the cluster; nothing here may act as anyone
@@ -438,8 +442,78 @@ func FromEnv() (Config, error) {
 		cfg.LeaseName = "agents-orchestrator"
 	}
 	cfg.LeaseNamespace = os.Getenv("LEASE_NAMESPACE")
+	if err := parseLeaderElection(&cfg); err != nil {
+		return Config{}, err
+	}
 	cfg.EgressCANamespace = os.Getenv("EGRESS_CA_NAMESPACE")
 	return cfg, nil
+}
+
+// LeaderElectionTimings are the client-go leader election timings of the
+// orchestrator's Lease (Go durations):
+//
+//   - LEADER_ELECTION_LEASE_DURATION (default 15s): how long a standby waits
+//     after the last renewal before it takes over;
+//   - LEADER_ELECTION_RENEW_DEADLINE (default 10s): how long the leader keeps
+//     retrying a failed renewal before it gives up leadership;
+//   - LEADER_ELECTION_RETRY_PERIOD (default 2s): the interval between attempts.
+//
+// The defaults are the values this service always used. An API server whose
+// storage stalls for longer than the renew deadline makes the leader give up
+// the Lease, and the process then exits (cmd/orchestrator); installations on
+// slow storage can lengthen all three. Every value is bounded to
+// maxLeaderElectionDuration so a unit typo cannot leave a crashed leader's
+// Lease blocking its replacement for hours.
+type LeaderElectionTimings struct {
+	LeaseDuration time.Duration
+	RenewDeadline time.Duration
+	RetryPeriod   time.Duration
+}
+
+const (
+	defaultLeaderElectionLeaseDuration = 15 * time.Second
+	defaultLeaderElectionRenewDeadline = 10 * time.Second
+	defaultLeaderElectionRetryPeriod   = 2 * time.Second
+	maxLeaderElectionDuration          = 10 * time.Minute
+)
+
+func parseLeaderElection(cfg *Config) error {
+	timings := LeaderElectionTimings{
+		LeaseDuration: defaultLeaderElectionLeaseDuration,
+		RenewDeadline: defaultLeaderElectionRenewDeadline,
+		RetryPeriod:   defaultLeaderElectionRetryPeriod,
+	}
+	for _, setting := range []struct {
+		name  string
+		value *time.Duration
+	}{
+		{"LEADER_ELECTION_LEASE_DURATION", &timings.LeaseDuration},
+		{"LEADER_ELECTION_RENEW_DEADLINE", &timings.RenewDeadline},
+		{"LEADER_ELECTION_RETRY_PERIOD", &timings.RetryPeriod},
+	} {
+		raw := strings.TrimSpace(os.Getenv(setting.name))
+		if raw == "" {
+			continue
+		}
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", setting.name, err)
+		}
+		if parsed <= 0 || parsed > maxLeaderElectionDuration {
+			return fmt.Errorf("%s must be greater than 0 and at most %s", setting.name, maxLeaderElectionDuration)
+		}
+		*setting.value = parsed
+	}
+	// The same ordering client-go's NewLeaderElector enforces, reported here
+	// with the variable names instead of at election start.
+	if timings.LeaseDuration <= timings.RenewDeadline {
+		return fmt.Errorf("LEADER_ELECTION_LEASE_DURATION (%s) must be greater than LEADER_ELECTION_RENEW_DEADLINE (%s)", timings.LeaseDuration, timings.RenewDeadline)
+	}
+	if timings.RenewDeadline <= time.Duration(leaderelection.JitterFactor*float64(timings.RetryPeriod)) {
+		return fmt.Errorf("LEADER_ELECTION_RENEW_DEADLINE (%s) must be greater than %.1f x LEADER_ELECTION_RETRY_PERIOD (%s)", timings.RenewDeadline, leaderelection.JitterFactor, timings.RetryPeriod)
+	}
+	cfg.LeaderElection = timings
+	return nil
 }
 
 // Failed-workload retention bounds. The evidence bound is Runners' own

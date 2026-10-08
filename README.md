@@ -261,6 +261,20 @@ The E2E `explicit-proxy` leg enforces restricted admission on the disposable VM
 and checks a live task Pod; that is not a Kata, production CNI or image-pull
 acceptance.
 
+## Leader Election Timings
+
+One replica at a time runs the reconciler, elected through the
+`agents-orchestrator` Lease. `LEADER_ELECTION_LEASE_DURATION`,
+`LEADER_ELECTION_RENEW_DEADLINE` and `LEADER_ELECTION_RETRY_PERIOD` (Go
+durations, defaults `15s`, `10s` and `2s`) set its timings; validation lives in
+[config.go](internal/config/config.go) (`LeaderElectionTimings`) and the
+election in [lease.go](internal/leader/lease.go). When renewals keep failing
+for the renew deadline, for example while the API server's storage stalls, the
+leader gives up the Lease and the process exits so its restart campaigns again.
+Where storage can stall, lengthen all three; a standby then also waits up to
+the lease duration before it takes over from a crashed leader. A shutdown
+releases the Lease, so a rolling update does not wait it out.
+
 ## Local Development
 
 Full setup: https://github.com/agynio/architecture/blob/main/architecture/operations/local-development.md
