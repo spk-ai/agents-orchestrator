@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"github.com/agynio/agents-orchestrator/internal/config"
 	"github.com/agynio/agents-orchestrator/internal/k8sclient"
@@ -21,6 +20,7 @@ type Leader struct {
 	namespace string
 	name      string
 	identity  string
+	timings   config.LeaderElectionTimings
 	onStarted func(context.Context)
 }
 
@@ -55,10 +55,17 @@ func New(cfg *config.Config, onStarted func(context.Context)) (*Leader, error) {
 		namespace: namespace,
 		name:      name,
 		identity:  identity,
+		timings:   cfg.LeaderElection,
 		onStarted: onStarted,
 	}, nil
 }
 
+// Run campaigns for the Lease and runs onStarted while this process holds it.
+// It returns when ctx ends (releasing the Lease) or when a renewal has kept
+// failing for the renew deadline. client-go's elector is single-use and the
+// leader workload's context is already cancelled by then, so the caller exits
+// and the restarted process campaigns again; a standby takes over after the
+// lease duration.
 func (l *Leader) Run(ctx context.Context) error {
 	lock := &resourcelock.LeaseLock{
 		LeaseMeta: metav1.ObjectMeta{
@@ -71,23 +78,29 @@ func (l *Leader) Run(ctx context.Context) error {
 		},
 	}
 
-	elector, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
+	elector, err := leaderelection.NewLeaderElector(electionConfig(lock, l.timings, l.onStarted))
+	if err != nil {
+		return fmt.Errorf("create leader elector: %w", err)
+	}
+
+	log.Printf("leader: campaigning for lease %s/%s (lease %s, renew deadline %s, retry %s)",
+		l.namespace, l.name, l.timings.LeaseDuration, l.timings.RenewDeadline, l.timings.RetryPeriod)
+	elector.Run(ctx)
+	return nil
+}
+
+func electionConfig(lock resourcelock.Interface, timings config.LeaderElectionTimings, onStarted func(context.Context)) leaderelection.LeaderElectionConfig {
+	return leaderelection.LeaderElectionConfig{
 		Lock:          lock,
-		LeaseDuration: 15 * time.Second,
-		RenewDeadline: 10 * time.Second,
-		RetryPeriod:   2 * time.Second,
+		LeaseDuration: timings.LeaseDuration,
+		RenewDeadline: timings.RenewDeadline,
+		RetryPeriod:   timings.RetryPeriod,
 		Callbacks: leaderelection.LeaderCallbacks{
-			OnStartedLeading: l.onStarted,
+			OnStartedLeading: onStarted,
 			OnStoppedLeading: func() {
 				log.Printf("leader: lost leadership")
 			},
 		},
 		ReleaseOnCancel: true,
-	})
-	if err != nil {
-		return fmt.Errorf("create leader elector: %w", err)
 	}
-
-	elector.Run(ctx)
-	return nil
 }

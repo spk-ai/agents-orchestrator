@@ -206,6 +206,16 @@ env:
     value: "65536"
   - name: LEASE_NAME
     value: ""
+  # Leader election timings of the Lease (Go durations; empty keeps 15s, 10s
+  # and 2s). The leader gives up the Lease, and the process exits, when renewals
+  # keep failing for the renew deadline; lengthen all three where the API
+  # server's storage can stall. See internal/config LeaderElectionTimings.
+  - name: LEADER_ELECTION_LEASE_DURATION
+    value: ""
+  - name: LEADER_ELECTION_RENEW_DEADLINE
+    value: ""
+  - name: LEADER_ELECTION_RETRY_PERIOD
+    value: ""
   # The CA lives beside this service, so the release namespace is the answer in
   # every install. service-base templates env values, so it is derived rather
   # than named by each one -- a literal here silently reads the wrong namespace
